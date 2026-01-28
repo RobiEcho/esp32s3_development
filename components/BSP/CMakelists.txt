@@ -3,6 +3,7 @@ set(src_dirs
     max98357a_amp
     st7789_lcd
     ws2812_led
+    mpu6050
 )
 
 set(include_dirs
@@ -10,6 +11,7 @@ set(include_dirs
     max98357a_amp
     st7789_lcd
     ws2812_led
+    mpu6050
 )
 
 set(requires
