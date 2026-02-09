@@ -60,6 +60,8 @@ esp_err_t audio_pipeline_start(BaseType_t core_id)
     
     ESP_ERROR_CHECK(inmp441_mic_init(dma_desc_num, dma_frame_num));
     ESP_ERROR_CHECK(max98357a_amp_init(dma_desc_num, dma_frame_num));
+    ESP_ERROR_CHECK(inmp441_mic_enable());  
+    ESP_ERROR_CHECK(max98357a_amp_enable());
     
 #if CONFIG_SPIRAM
     s_buffers.input = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int32_t), MALLOC_CAP_SPIRAM);
@@ -75,18 +77,6 @@ esp_err_t audio_pipeline_start(BaseType_t core_id)
         s_buffers.input = NULL;
         s_buffers.output = NULL;
         return ESP_ERR_NO_MEM;
-    }
-    
-    esp_err_t ret = inmp441_mic_enable();
-    if (ret != ESP_OK) {
-        audio_pipeline_stop();
-        return ret;
-    }
-    
-    ret = max98357a_amp_enable();
-    if (ret != ESP_OK) {
-        audio_pipeline_stop();
-        return ret;
     }
     
     s_running = true;

@@ -10,7 +10,6 @@
 #include "model_path.h"
 #include "inmp441_mic.h"
 #include "max98357a_amp.h"
-#include "ws2812_led.h"
 #include "freertos/task.h"
 #include <string.h>
 
@@ -21,32 +20,8 @@ static TaskHandle_t s_feed_task_handle = NULL;
 static bool s_running = false;
 static bool is_wakenet_detected = false;
 
-// 去除前导空格
-static const char *_skip_leading_space(const char *s)
-{
-    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') {
-        s++;
-    }
-    return s;
-}
-
-// 执行语音命令
-static void _execute_voice_command(const char *command)
-{
-    const char *cmd = _skip_leading_space(command);
-    
-    ESP_LOGI(TAG, "识别到命令：'%s'", cmd);
-    
-    if (strcmp(cmd, "kai deng") == 0) {
-        ESP_LOGI(TAG, "执行：开灯");
-        ws2812_led_start_rainbow();
-    } else if (strcmp(cmd, "guan deng") == 0) {
-        ESP_LOGI(TAG, "执行：关灯");
-        ws2812_led_clear();
-    } else {
-        ESP_LOGW(TAG, "未识别的命令");
-    }
-}
+// 命令回调函数
+static speech_command_callback_t s_command_callback = NULL;
 
 // AFE和模型句柄
 static const esp_afe_sr_iface_t *s_afe_handle = NULL;  // AFE接口句柄（音频前端处理）
@@ -122,8 +97,10 @@ static void speech_recognition_task(void *arg)
             if (mn_state == ESP_MN_STATE_DETECTED) {
                 esp_mn_results_t *mn_result = s_multinet->get_results(s_model_data_mn);
                 if (mn_result && mn_result->num > 0) {
-                    // 执行语音命令
-                    _execute_voice_command(mn_result->string);
+                    // 通过回调通知上层
+                    if (s_command_callback) {
+                        s_command_callback(mn_result->string);
+                    }
                 }
                 is_wakenet_detected = false;
                 
@@ -139,8 +116,9 @@ static void speech_recognition_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t speech_recognition_init(void)
+esp_err_t speech_recognition_init(speech_command_callback_t callback)
 {
+    s_command_callback = callback;
     
     // 初始化模型列表
     srmodel_list_t *models = esp_srmodel_init("model");

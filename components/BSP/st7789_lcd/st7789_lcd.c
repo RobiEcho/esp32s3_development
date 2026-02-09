@@ -78,7 +78,7 @@ esp_err_t st7789_lcd_register_trans_done_cb(esp_lcd_panel_io_color_trans_done_cb
 
 void st7789_lcd_draw_bitmap(int x1, int y1, int x2, int y2, void *color_data)
 {
-    // ST7789 需要的大端序，传入数据是要先交换高低位
+    // ST7789 需要的大端序，传入的数据要先交换高低位，这里是不做字节序交换逻辑
     esp_lcd_panel_draw_bitmap(s_panel_handle, x1, y1, x2, y2, color_data);
 }
 

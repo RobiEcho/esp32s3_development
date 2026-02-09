@@ -1,24 +1,14 @@
 set(src_dirs
-    inmp441_mic
-    max98357a_amp
-    st7789_lcd
-    ws2812_led
-    mpu6050
+    lvgl_port
 )
 
 set(include_dirs
-    inmp441_mic
-    max98357a_amp
-    st7789_lcd
-    ws2812_led
-    mpu6050
+    lvgl_port
 )
 
 set(requires
-    driver
-    esp_driver_i2s
-    esp_lcd
-    led_strip 
+    BSP
+    lvgl
     esp_timer
 )
 
