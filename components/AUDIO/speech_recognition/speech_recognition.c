@@ -175,13 +175,8 @@ esp_err_t speech_recognition_init(speech_command_callback_t callback)
     
     // 分配音频缓冲区
     s_afe_chunksize = s_afe_handle->get_feed_chunksize(s_afe_data);
-#if CONFIG_SPIRAM
-    s_audio_buffer_32 = heap_caps_malloc(s_afe_chunksize * sizeof(int32_t), MALLOC_CAP_SPIRAM);
-    s_audio_buffer_16 = heap_caps_malloc(s_afe_chunksize * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-#else
-    s_audio_buffer_32 = heap_caps_malloc(s_afe_chunksize * sizeof(int32_t), MALLOC_CAP_INTERNAL);
-    s_audio_buffer_16 = heap_caps_malloc(s_afe_chunksize * sizeof(int16_t), MALLOC_CAP_INTERNAL);
-#endif
+    s_audio_buffer_32 = heap_caps_malloc(s_afe_chunksize * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    s_audio_buffer_16 = heap_caps_malloc(s_afe_chunksize * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     
     if (!s_audio_buffer_32 || !s_audio_buffer_16) {
         ESP_LOGE(TAG, "音频缓冲区分配失败");
@@ -196,7 +191,7 @@ esp_err_t speech_recognition_init(speech_command_callback_t callback)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "音频缓冲区已分配: %d 采样点", s_afe_chunksize);
+    ESP_LOGI(TAG, "音频缓冲区已分配: frame size = %d samples", s_afe_chunksize);
     ESP_ERROR_CHECK(inmp441_mic_init(0, s_afe_chunksize));
     ESP_ERROR_CHECK(inmp441_mic_enable());  
     ESP_ERROR_CHECK(max98357a_amp_init(0, s_afe_chunksize));
@@ -228,7 +223,7 @@ esp_err_t speech_recognition_init(speech_command_callback_t callback)
     esp_mn_commands_add(2, "guan deng");
     esp_mn_commands_update();
     
-    ESP_LOGI(TAG, "语音识别初始化完成（双任务模式）");
+    ESP_LOGI(TAG, "语音识别初始化完成");
     return ESP_OK;
 }
 
@@ -282,7 +277,7 @@ esp_err_t speech_recognition_start(void)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "语音识别已启动（双任务模式：音频采集@CPU0 + 识别@CPU1）");
+    ESP_LOGI(TAG, "语音识别已启动（音频采集@CPU0 + 识别@CPU1）");
     return ESP_OK;
 }
 

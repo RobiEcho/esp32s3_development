@@ -66,13 +66,8 @@ lv_disp_t *lvgl_port_init(void)
     int buf_lines = ver_res / LVGL_DRAW_BUF_FRACTION;  // 计算缓冲区行数
 
     // 分配绘图缓冲区
-#if CONFIG_SPIRAM
-    lv_color_t *buf1 = heap_caps_malloc(hor_res * buf_lines * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    lv_color_t *buf2 = heap_caps_malloc(hor_res * buf_lines * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-#else
-    lv_color_t *buf1 = heap_caps_malloc(hor_res * buf_lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
-    lv_color_t *buf2 = heap_caps_malloc(hor_res * buf_lines * sizeof(lv_color_t), MALLOC_CAP_DMA);
-#endif
+    lv_color_t *buf1 = heap_caps_malloc(hor_res * buf_lines * sizeof(lv_color_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    lv_color_t *buf2 = heap_caps_malloc(hor_res * buf_lines * sizeof(lv_color_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     
     if (!buf1 || !buf2) {
         ESP_LOGE(TAG, "Failed to allocate LVGL buffers");

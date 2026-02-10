@@ -63,13 +63,8 @@ esp_err_t audio_pipeline_start(BaseType_t core_id)
     ESP_ERROR_CHECK(inmp441_mic_enable());  
     ESP_ERROR_CHECK(max98357a_amp_enable());
     
-#if CONFIG_SPIRAM
-    s_buffers.input = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int32_t), MALLOC_CAP_SPIRAM);
-    s_buffers.output = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-#else
-    s_buffers.input = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int32_t), MALLOC_CAP_DMA);
-    s_buffers.output = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int16_t), MALLOC_CAP_DMA);
-#endif
+    s_buffers.input = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    s_buffers.output = heap_caps_malloc(AUDIO_BLOCK_SIZE * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     
     if (!s_buffers.input || !s_buffers.output) {
         if (s_buffers.input) free(s_buffers.input);
