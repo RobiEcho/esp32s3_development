@@ -16,8 +16,6 @@ static const char *_skip_leading_space(const char *s)
 
 esp_err_t command_handler_init(void)
 {
-    // 初始化需要控制的硬件
-    ws2812_led_init();
     ESP_LOGI(TAG, "命令处理器初始化完成");
     return ESP_OK;
 }
