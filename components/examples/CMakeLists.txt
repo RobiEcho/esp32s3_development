@@ -11,6 +11,7 @@ set(requires
     NET
     APP
     AUDIO
+    CODEC
 )
 
 idf_component_register(

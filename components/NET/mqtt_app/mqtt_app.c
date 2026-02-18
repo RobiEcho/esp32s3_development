@@ -13,8 +13,10 @@ static volatile bool s_connected = false;
 
 static mqtt_data_handler_t s_data_handler = NULL;
 
-static uint8_t *s_img_buf = NULL;           // 分片缓冲区
-static size_t s_fragment_len = 0;           // 当前已接收字节数
+// 分片重组缓冲区
+#define FRAGMENT_BUFFER_SIZE (32 * 1024)
+static uint8_t *s_fragment_buf = NULL;          // 分片缓冲区
+static size_t s_fragment_len = 0;               // 当前已接收字节数
 
 // MQTT 事件处理
 static void _mqtt_app_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
@@ -53,21 +55,21 @@ static void _mqtt_app_event_handler(void *arg, esp_event_base_t base, int32_t ev
             }
 
             // 检查是否会溢出
-            if (offset + len > MQTT_APP_IMG_BUF_SIZE) {
-                ESP_LOGE(TAG, "分片缓冲区溢出，丢弃数据 (需要: %u, 可用: %u)", offset + len, MQTT_APP_IMG_BUF_SIZE);
+            if (offset + len > FRAGMENT_BUFFER_SIZE) {
+                ESP_LOGE(TAG, "分片缓冲区溢出，丢弃数据 (需要: %u, 可用: %u)", offset + len, FRAGMENT_BUFFER_SIZE);
                 s_fragment_len = 0;
                 break;
             }
 
             // 将数据写入正确的位置
-            memcpy(s_img_buf + offset, data, len);
+            memcpy(s_fragment_buf + offset, data, len);
             s_fragment_len = offset + len;
 
             // 检查是否收到了完整消息
             if (s_fragment_len == total_len) {
                 // 调用处理函数，传递完整数据
                 if (s_data_handler) {
-                    s_data_handler(s_img_buf, s_fragment_len);
+                    s_data_handler(s_fragment_buf, s_fragment_len);
                 }
                 // 重置缓冲区
                 s_fragment_len = 0;
@@ -91,8 +93,8 @@ esp_err_t mqtt_app_init(void)
     }
 
     // 分配分片缓冲区
-    s_img_buf = heap_caps_malloc(MQTT_APP_IMG_BUF_SIZE, MALLOC_CAP_SPIRAM);
-    if (s_img_buf == NULL) {
+    s_fragment_buf = heap_caps_malloc(FRAGMENT_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    if (s_fragment_buf == NULL) {
         ESP_LOGE(TAG, "分片缓冲区分配失败");
         return ESP_ERR_NO_MEM;
     }

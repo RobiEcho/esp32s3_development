@@ -10,7 +10,7 @@
 #define EXAMPLE_MQTT_IMAGE          5
 
 // 选择要运行的示例
-#define SELECTED_EXAMPLE  EXAMPLE_SPEECH_RECOGNITION
+#define SELECTED_EXAMPLE  EXAMPLE_MQTT_IMAGE
 
 void examples_run_demo(void);
 void example_audio_loopback(void);
