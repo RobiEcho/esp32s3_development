@@ -13,11 +13,6 @@ static volatile bool s_connected = false;
 
 static mqtt_data_handler_t s_data_handler = NULL;
 
-// 分片重组缓冲区
-#define FRAGMENT_BUFFER_SIZE (32 * 1024)
-static uint8_t *s_fragment_buf = NULL;          // 分片缓冲区
-static size_t s_fragment_len = 0;               // 当前已接收字节数
-
 // MQTT 事件处理
 static void _mqtt_app_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
 {
@@ -38,42 +33,11 @@ static void _mqtt_app_event_handler(void *arg, esp_event_base_t base, int32_t ev
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "已断开");
         s_connected = false;
-        s_fragment_len = 0;
         break;
 
     case MQTT_EVENT_DATA:
-        // 接收到数据分片，进行重组
-        if (event->data && event->data_len > 0) {
-            const uint8_t *data = (const uint8_t *)event->data;
-            size_t len = event->data_len;
-            uint32_t offset = event->current_data_offset;
-            uint32_t total_len = event->total_data_len;
-
-            // 如果是新消息的开始，重置缓冲区
-            if (offset == 0) {
-                s_fragment_len = 0;
-            }
-
-            // 检查是否会溢出
-            if (offset + len > FRAGMENT_BUFFER_SIZE) {
-                ESP_LOGE(TAG, "分片缓冲区溢出，丢弃数据 (需要: %u, 可用: %u)", offset + len, FRAGMENT_BUFFER_SIZE);
-                s_fragment_len = 0;
-                break;
-            }
-
-            // 将数据写入正确的位置
-            memcpy(s_fragment_buf + offset, data, len);
-            s_fragment_len = offset + len;
-
-            // 检查是否收到了完整消息
-            if (s_fragment_len == total_len) {
-                // 调用处理函数，传递完整数据
-                if (s_data_handler) {
-                    s_data_handler(s_fragment_buf, s_fragment_len);
-                }
-                // 重置缓冲区
-                s_fragment_len = 0;
-            }
+        if (s_data_handler && event->data && event->data_len > 0) {
+            s_data_handler((const uint8_t *)event->data, event->data_len);
         }
         break;
 
@@ -90,13 +54,6 @@ esp_err_t mqtt_app_init(void)
 {
     if (s_inited) {
         return ESP_OK;
-    }
-
-    // 分配分片缓冲区
-    s_fragment_buf = heap_caps_malloc(FRAGMENT_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-    if (s_fragment_buf == NULL) {
-        ESP_LOGE(TAG, "分片缓冲区分配失败");
-        return ESP_ERR_NO_MEM;
     }
 
     // MQTT 客户端配置

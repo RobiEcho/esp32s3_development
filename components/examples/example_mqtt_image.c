@@ -1,13 +1,19 @@
 #include "examples.h"
 #include "wifi_manager.h"
 #include "mqtt_app.h"
-#include "image_decode.h"
+#include "video_decode.h"
 #include "st7789_lcd.h"
 #include "ws2812_led.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+
+/**
+ * 在wifi稳定且高速的情况下：
+ * 目前的方案发送端以25帧率的视频帧发送并且网络稳定的情况下，连续发送一段总帧数为725帧的 jpeg 流，丢包包数量为 11，丢帧率 < 0.02%
+ * 受限于jpeg解码速度，当发送频率来到30帧，就会出现高频丢包情况，想要稳定不丢丢包，可能需要20帧的视频数据。
+ */
 
 static const char *TAG = "example_mqtt_image";
 
@@ -42,7 +48,7 @@ static esp_err_t mqtt_app_image_handler(const uint8_t *data, size_t len)
         return ESP_ERR_INVALID_ARG;
     }
     
-    return image_decode_push_data(data, len);
+    return video_decode_push_data(data, len);
 }
 
 static bool IRAM_ATTR _st7789_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
@@ -56,10 +62,10 @@ static void _image_decode_display_task(void *arg)
     (void)arg;
     uint8_t *jpeg_data = NULL;
     size_t jpeg_len = 0;
-    image_info_t img_info;
+    video_frame_info_t frame_info;
 
     while (1) {
-        if (image_decode_get_frame(&jpeg_data, &jpeg_len) == ESP_OK) {
+        if (video_decode_get_frame(&jpeg_data, &jpeg_len) == ESP_OK) {
             uint8_t decode_idx = 0xFF;
             for (uint8_t i = 0; i < 2; i++) {
                 if (s_pingpong.status[i] == BUF_IDLE) {
@@ -70,23 +76,29 @@ static void _image_decode_display_task(void *arg)
             }
             
             if (decode_idx == 0xFF) {
+                // 没有空闲缓冲区，释放帧并继续
+                video_decode_release_frame(jpeg_len);
                 vTaskDelay(pdMS_TO_TICKS(1));
                 continue;
             }
             
-            esp_err_t ret = image_decode_process(jpeg_data, jpeg_len, s_pingpong.buf[decode_idx], 240 * 240 * 2, &img_info);
+            esp_err_t ret = video_decode_process(jpeg_data, jpeg_len, s_pingpong.buf[decode_idx], 240 * 240 * 2, &frame_info);
+            
+            // 解码完成，立即释放帧空间
+            video_decode_release_frame(jpeg_len);
+            
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "图像解码失败: %s", esp_err_to_name(ret));
                 s_pingpong.status[decode_idx] = BUF_IDLE;
                 continue;
             }
 
-            if (img_info.width == 240 && img_info.height == 240) {
+            if (frame_info.width == 240 && frame_info.height == 240) {
                 s_pingpong.status[decode_idx] = BUF_READY;
                 xSemaphoreGive(s_frame_ready_sem);
             } else {
                 ESP_LOGW(TAG, "图像尺寸不符合要求 (期望: 240x240, 实际: %dx%d)，不显示",
-                        img_info.width, img_info.height);
+                        frame_info.width, frame_info.height);
                 s_pingpong.status[decode_idx] = BUF_IDLE;
             }
         }
@@ -151,8 +163,8 @@ void example_mqtt_image(void)
     // 注册 DMA 传输完成回调
     ESP_ERROR_CHECK(st7789_lcd_register_trans_done_cb(_st7789_trans_done_cb, NULL));
     
-    // 初始化图像解码模块
-    ESP_ERROR_CHECK(image_decode_init());
+    // 初始化视频解码模块
+    ESP_ERROR_CHECK(video_decode_init());
     
     // 启动 WiFi
     ESP_LOGI(TAG, "连接 WiFi...");
@@ -186,12 +198,12 @@ void example_mqtt_image(void)
     ESP_LOGI(TAG, "LED: 绿色（MQTT 已连接）");
     
     // 创建图像解码任务（CPU1，优先级 5）
-    xTaskCreatePinnedToCore(_image_decode_display_task, "image_decode", 8192, NULL, 5, NULL, 1);
-    ESP_LOGI(TAG, "图像解码任务已创建（CPU1）");
+    xTaskCreatePinnedToCore(_image_decode_display_task, "video_decode", 8192, NULL, 5, NULL, 1);
+    ESP_LOGI(TAG, "视频解码任务已创建（CPU1）");
     
-    // 创建 ST7789 显示任务（CPU1，优先级 5）
+    // 创建 ST7789 显示任务（CPU0，优先级 5）
     xTaskCreatePinnedToCore(_st7789_display_task, "st7789_display", 4096, NULL, 5, NULL, 0);
-    ESP_LOGI(TAG, "ST7789 显示任务已创建（CPU1）");
+    ESP_LOGI(TAG, "ST7789 显示任务已创建（CPU0）");
     
     ESP_LOGI(TAG, "等待接收 JPEG 图像数据...");
 }

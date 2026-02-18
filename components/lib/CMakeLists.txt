@@ -1,14 +1,13 @@
 set(src_dirs
-    image_decode
+    TJpgDec
 )
 
 set(include_dirs
-    image_decode
+    TJpgDec
 )
 
 set(requires
-    esp_jpeg
-    esp_timer
+
 )
 
 idf_component_register(
