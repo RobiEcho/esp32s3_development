@@ -10,15 +10,33 @@
 #include "model_path.h"
 #include "inmp441_mic.h"
 #include "max98357a_amp.h"
+#include "audio_player.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include <string.h>
 
 static const char *TAG = "speech_recognition";
 
 static TaskHandle_t s_recog_task_handle = NULL;
 static TaskHandle_t s_feed_task_handle = NULL;
+static TaskHandle_t s_audio_play_task_handle = NULL;
 static bool s_running = false;
 static bool is_wakenet_detected = false;
+
+// 音频播放事件标志组
+static EventGroupHandle_t s_audio_event_group = NULL;
+
+// 事件标志位定义
+#define AUDIO_EVENT_WAKEUP_CONFIRM  (1 << 0)  // 唤醒确认
+#define AUDIO_EVENT_COMMAND_CONFIRM (1 << 1)  // 命令确认
+#define AUDIO_EVENT_ERROR           (1 << 2)  // 错误提示
+#define AUDIO_EVENT_COMMAND_1       (1 << 3)  // 命令1反馈
+#define AUDIO_EVENT_COMMAND_2       (1 << 4)  // 命令2反馈
+#define AUDIO_EVENT_ALL             (AUDIO_EVENT_WAKEUP_CONFIRM | \
+                                     AUDIO_EVENT_COMMAND_CONFIRM | \
+                                     AUDIO_EVENT_ERROR | \
+                                     AUDIO_EVENT_COMMAND_1 | \
+                                     AUDIO_EVENT_COMMAND_2)
 
 // 命令回调函数
 static speech_command_callback_t s_command_callback = NULL;
@@ -34,10 +52,75 @@ static int s_afe_chunksize = 0;                        // AFE每次处理的音�
 static int32_t *s_audio_buffer_32 = NULL;
 static int16_t *s_audio_buffer_16 = NULL;
 
+// 音频播放任务
+static void audio_play_task(void *arg)
+{
+    ESP_LOGI(TAG, "音频播放任务已启动");
+    
+    while (s_running) {
+        // 等待任意音频播放事件
+        EventBits_t bits = xEventGroupWaitBits(
+            s_audio_event_group,
+            AUDIO_EVENT_ALL,
+            pdFALSE,        // 不自动清除
+            pdFALSE,        // 等待任意一个事件
+            portMAX_DELAY   // 永久等待
+        );
+        
+        // 按优先级处理事件（从高到低）
+        if (bits & AUDIO_EVENT_WAKEUP_CONFIRM) {
+            xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_WAKEUP_CONFIRM);
+            ESP_LOGI(TAG, "播放音频: 唤醒确认");
+            esp_err_t ret = audio_player_play(AUDIO_TYPE_WAKEUP_CONFIRM);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+            }
+        }
+        else if (bits & AUDIO_EVENT_COMMAND_CONFIRM) {
+            xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_COMMAND_CONFIRM);
+            ESP_LOGI(TAG, "播放音频: 命令确认");
+            esp_err_t ret = audio_player_play(AUDIO_TYPE_COMMAND_CONFIRM);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+            }
+        }
+        else if (bits & AUDIO_EVENT_ERROR) {
+            xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_ERROR);
+            ESP_LOGI(TAG, "播放音频: 错误提示");
+            esp_err_t ret = audio_player_play(AUDIO_TYPE_ERROR);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+            }
+        }
+        else if (bits & AUDIO_EVENT_COMMAND_1) {
+            xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_COMMAND_1);
+            ESP_LOGI(TAG, "播放音频: 命令1反馈");
+            esp_err_t ret = audio_player_play(AUDIO_TYPE_COMMAND_1);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+            }
+        }
+        else if (bits & AUDIO_EVENT_COMMAND_2) {
+            xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_COMMAND_2);
+            ESP_LOGI(TAG, "播放音频: 命令2反馈");
+            esp_err_t ret = audio_player_play(AUDIO_TYPE_COMMAND_2);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+            }
+        }
+    }
+    
+    ESP_LOGI(TAG, "音频播放任务已退出");
+    s_audio_play_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
 static void _play_response_audio(void)
 {
     ESP_LOGI(TAG, "唤醒反馈：我在！");
-    //TODO:可以播放语音，但还没设计
+    
+    // 设置唤醒确认事件标志
+    xEventGroupSetBits(s_audio_event_group, AUDIO_EVENT_WAKEUP_CONFIRM);
 }
 
 static void audio_feed_task(void *arg)
@@ -59,8 +142,8 @@ static void audio_feed_task(void *arg)
         }
         
         // 输出到扬声器（用于调试，后续扬声器专门负责回复语音）
-        size_t bytes_written = 0;
-        max98357a_amp_write(s_audio_buffer_16, s_afe_chunksize * sizeof(int16_t), &bytes_written, 0);
+        // size_t bytes_written = 0;
+        // max98357a_amp_write(s_audio_buffer_16, s_afe_chunksize * sizeof(int16_t), &bytes_written, 0);
         
         // 给AFE喂数据
         s_afe_handle->feed(s_afe_data, s_audio_buffer_16);
@@ -119,6 +202,20 @@ static void speech_recognition_task(void *arg)
 esp_err_t speech_recognition_init(speech_command_callback_t callback)
 {
     s_command_callback = callback;
+    
+    // 初始化音频播放器
+    esp_err_t ret = audio_player_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "音频播放器初始化失败");
+        return ret;
+    }
+    
+    // 创建音频播放事件标志组
+    s_audio_event_group = xEventGroupCreate();
+    if (s_audio_event_group == NULL) {
+        ESP_LOGE(TAG, "创建音频事件标志组失败");
+        return ESP_FAIL;
+    }
     
     // 初始化模型列表
     srmodel_list_t *models = esp_srmodel_init("model");
@@ -253,7 +350,7 @@ esp_err_t speech_recognition_start(void)
         return ESP_FAIL;
     }
     
-    // 创建语音识别任务（CPU1）
+    // 创建语音识别任务（CPU1，优先级5）
     ret = xTaskCreatePinnedToCore(
         speech_recognition_task, 
         "speech_recog", 
@@ -277,7 +374,35 @@ esp_err_t speech_recognition_start(void)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "语音识别已启动（音频采集@CPU0 + 识别@CPU1）");
+    // 创建音频播放任务（CPU1，优先级6，高于识别任务）
+    ret = xTaskCreatePinnedToCore(
+        audio_play_task,
+        "audio_play",
+        4096,
+        NULL,
+        6,              // 优先级6，高于识别任务
+        &s_audio_play_task_handle,
+        1               // CPU1
+    );
+    
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "创建音频播放任务失败");
+        s_running = false;
+        
+        // 停止已创建的任务
+        if (s_feed_task_handle != NULL) {
+            vTaskDelete(s_feed_task_handle);
+            s_feed_task_handle = NULL;
+        }
+        if (s_recog_task_handle != NULL) {
+            vTaskDelete(s_recog_task_handle);
+            s_recog_task_handle = NULL;
+        }
+        
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "语音识别已启动（音频采集@CPU0 + 识别@CPU1 + 播放@CPU1）");
     return ESP_OK;
 }
 
@@ -294,6 +419,19 @@ esp_err_t speech_recognition_stop(void)
     if (s_feed_task_handle != NULL) {
         ESP_LOGI(TAG, "等待音频采集任务退出...");
         while (s_feed_task_handle != NULL) vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    if (s_audio_play_task_handle != NULL) {
+        ESP_LOGI(TAG, "等待音频播放任务退出...");
+        // 设置一个事件唤醒任务，让它检查s_running标志
+        xEventGroupSetBits(s_audio_event_group, AUDIO_EVENT_WAKEUP_CONFIRM);
+        while (s_audio_play_task_handle != NULL) vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    // 清理事件标志组
+    if (s_audio_event_group != NULL) {
+        vEventGroupDelete(s_audio_event_group);
+        s_audio_event_group = NULL;
     }
     
     // 释放缓冲区
@@ -317,5 +455,39 @@ esp_err_t speech_recognition_stop(void)
     }
     
     ESP_LOGI(TAG, "语音识别已停止");
+    return ESP_OK;
+}
+
+esp_err_t speech_recognition_trigger_audio(audio_play_type_t type)
+{
+    if (s_audio_event_group == NULL) {
+        ESP_LOGE(TAG, "音频事件标志组未初始化");
+        return ESP_FAIL;
+    }
+    
+    EventBits_t event_bit = 0;
+    
+    switch (type) {
+        case AUDIO_PLAY_WAKEUP_CONFIRM:
+            event_bit = AUDIO_EVENT_WAKEUP_CONFIRM;
+            break;
+        case AUDIO_PLAY_COMMAND_CONFIRM:
+            event_bit = AUDIO_EVENT_COMMAND_CONFIRM;
+            break;
+        case AUDIO_PLAY_ERROR:
+            event_bit = AUDIO_EVENT_ERROR;
+            break;
+        case AUDIO_PLAY_COMMAND_1:
+            event_bit = AUDIO_EVENT_COMMAND_1;
+            break;
+        case AUDIO_PLAY_COMMAND_2:
+            event_bit = AUDIO_EVENT_COMMAND_2;
+            break;
+        default:
+            ESP_LOGE(TAG, "未知的音频类型: %d", type);
+            return ESP_FAIL;
+    }
+    
+    xEventGroupSetBits(s_audio_event_group, event_bit);
     return ESP_OK;
 }

@@ -1,5 +1,6 @@
 #include "command_handler.h"
 #include "ws2812_led.h"
+#include "speech_recognition.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -33,10 +34,16 @@ void command_handler_execute(const char *command)
     if (strcmp(cmd, "kai deng") == 0) {
         ESP_LOGI(TAG, "开灯");
         ws2812_led_start_rainbow();
+        // 触发命令2反馈音频
+        speech_recognition_trigger_audio(AUDIO_PLAY_COMMAND_2);
     } else if (strcmp(cmd, "guan deng") == 0) {
         ESP_LOGI(TAG, "关灯");
         ws2812_led_clear();
+        // 触发命令1反馈音频
+        speech_recognition_trigger_audio(AUDIO_PLAY_COMMAND_1);
     } else {
         ESP_LOGW(TAG, "未识别的命令: '%s'", cmd);
+        // 触发错误提示音频
+        speech_recognition_trigger_audio(AUDIO_PLAY_ERROR);
     }
 }
