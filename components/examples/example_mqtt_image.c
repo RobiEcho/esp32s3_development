@@ -1,4 +1,6 @@
 #include "examples.h"
+
+#if SELECTED_EXAMPLE == EXAMPLE_MQTT_IMAGE
 #include "wifi_manager.h"
 #include "mqtt_app.h"
 #include "video_decode.h"
@@ -130,9 +132,7 @@ static void _st7789_display_task(void *arg)
 }
 
 void example_mqtt_image(void)
-{
-    ESP_LOGI(TAG, "=== MQTT 图像接收测试 ===");
-    
+{   
     // 初始化 LED（红色：启动中）
     ws2812_led_init();
     ws2812_led_set_color(30, 0, 0);
@@ -207,3 +207,4 @@ void example_mqtt_image(void)
     
     ESP_LOGI(TAG, "等待接收 JPEG 图像数据...");
 }
+#endif

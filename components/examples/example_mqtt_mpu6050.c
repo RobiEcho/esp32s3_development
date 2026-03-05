@@ -1,4 +1,6 @@
 #include "examples.h"
+
+#if SELECTED_EXAMPLE == EXAMPLE_MQTT_MPU6050
 #include "wifi_manager.h"
 #include "mqtt_app.h"
 #include "mqtt_app_config.h"
@@ -102,3 +104,4 @@ void example_wifi_mqtt(void)
     ESP_LOGI(TAG, "MPU6050 数据发布任务已创建");
     ESP_LOGI(TAG, "开始每 0.5 秒发布传感器数据到 MQTT...");
 }
+#endif

@@ -13,11 +13,19 @@
 #define SELECTED_EXAMPLE EXAMPLE_SPEECH_RECOGNITION
 
 void examples_run_demo(void);
+
+#if SELECTED_EXAMPLE == EXAMPLE_AUDIO_LOOPBACK
 void example_audio_loopback(void);
+#elif SELECTED_EXAMPLE == EXAMPLE_LVGL_DISPLAY
 void example_lvgl_display(void);
+#elif SELECTED_EXAMPLE == EXAMPLE_LED_EFFECTS
 void example_led_effects(void);
+#elif SELECTED_EXAMPLE == EXAMPLE_SPEECH_RECOGNITION
 void example_speech_recognition(void);
+#elif SELECTED_EXAMPLE == EXAMPLE_MQTT_MPU6050
 void example_wifi_mqtt(void);
+#elif SELECTED_EXAMPLE == EXAMPLE_MQTT_IMAGE
 void example_mqtt_image(void);
+#endif
 
 #endif

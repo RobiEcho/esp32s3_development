@@ -1,4 +1,6 @@
 #include "examples.h"
+
+#if SELECTED_EXAMPLE == EXAMPLE_LVGL_DISPLAY
 #include "lvgl_port.h"
 #include "lvgl_demo_ui.h"
 #include "esp_log.h"
@@ -9,7 +11,7 @@ static const char *TAG = "example_lvgl";
 
 void example_lvgl_display(void)
 {
-    ESP_LOGI(TAG, "=== LVGL 显示测试 ===");
+    ESP_LOGI(TAG, "LVGL 显示测试");
     
     // 初始化 LVGL
     lv_disp_t *disp = lvgl_port_init();
@@ -35,3 +37,4 @@ void example_lvgl_display(void)
     
     ESP_LOGI(TAG, "LVGL 显示测试已启动");
 }
+#endif

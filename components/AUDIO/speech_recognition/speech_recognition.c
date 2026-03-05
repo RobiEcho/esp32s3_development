@@ -10,6 +10,7 @@
 #include "model_path.h"
 #include "inmp441_mic.h"
 #include "max98357a_amp.h"
+#include "ws2812_led.h"
 #include "audio_player.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -21,10 +22,9 @@ static TaskHandle_t s_recog_task_handle = NULL;
 static TaskHandle_t s_feed_task_handle = NULL;
 static TaskHandle_t s_audio_play_task_handle = NULL;
 static bool s_running = false;
-static bool is_wakenet_detected = false;
+static bool is_wakenet_detected = false;              // 唤醒状态标志
 
-// 音频播放事件标志组
-static EventGroupHandle_t s_audio_event_group = NULL;
+static EventGroupHandle_t s_audio_event_group = NULL; // 音频播放事件标志组
 
 // 事件标志位定义
 #define AUDIO_EVENT_WAKEUP_CONFIRM  (1 << 0)  // 唤醒确认
@@ -32,14 +32,7 @@ static EventGroupHandle_t s_audio_event_group = NULL;
 #define AUDIO_EVENT_ERROR           (1 << 2)  // 错误提示
 #define AUDIO_EVENT_COMMAND_1       (1 << 3)  // 命令1反馈
 #define AUDIO_EVENT_COMMAND_2       (1 << 4)  // 命令2反馈
-#define AUDIO_EVENT_ALL             (AUDIO_EVENT_WAKEUP_CONFIRM | \
-                                     AUDIO_EVENT_COMMAND_CONFIRM | \
-                                     AUDIO_EVENT_ERROR | \
-                                     AUDIO_EVENT_COMMAND_1 | \
-                                     AUDIO_EVENT_COMMAND_2)
-
-// 命令回调函数
-static speech_command_callback_t s_command_callback = NULL;
+#define AUDIO_EVENT_ALL             (AUDIO_EVENT_WAKEUP_CONFIRM | AUDIO_EVENT_COMMAND_CONFIRM | AUDIO_EVENT_ERROR | AUDIO_EVENT_COMMAND_1 |AUDIO_EVENT_COMMAND_2)
 
 // AFE和模型句柄
 static const esp_afe_sr_iface_t *s_afe_handle = NULL;  // AFE接口句柄（音频前端处理）
@@ -52,10 +45,12 @@ static int s_afe_chunksize = 0;                        // AFE每次处理的音�
 static int32_t *s_audio_buffer_32 = NULL;
 static int16_t *s_audio_buffer_16 = NULL;
 
-// 音频播放任务
+static void _command_handler_execute(const char *command);
+
+// 回应音频播放任务
 static void audio_play_task(void *arg)
 {
-    ESP_LOGI(TAG, "音频播放任务已启动");
+    ESP_LOGI(TAG, "回应音频任务已启动");
     
     while (s_running) {
         // 等待任意音频播放事件
@@ -70,57 +65,49 @@ static void audio_play_task(void *arg)
         // 按优先级处理事件（从高到低）
         if (bits & AUDIO_EVENT_WAKEUP_CONFIRM) {
             xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_WAKEUP_CONFIRM);
-            ESP_LOGI(TAG, "播放音频: 唤醒确认");
+            ESP_LOGI(TAG, "回应音频: 唤醒确认");
             esp_err_t ret = audio_player_play(AUDIO_TYPE_WAKEUP_CONFIRM);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+                ESP_LOGE(TAG, "唤醒音频回应失败");
             }
         }
         else if (bits & AUDIO_EVENT_COMMAND_CONFIRM) {
             xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_COMMAND_CONFIRM);
-            ESP_LOGI(TAG, "播放音频: 命令确认");
+            ESP_LOGI(TAG, "回应音频: 命令确认");
             esp_err_t ret = audio_player_play(AUDIO_TYPE_COMMAND_CONFIRM);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+                ESP_LOGE(TAG, "命令音频回应失败");
             }
         }
         else if (bits & AUDIO_EVENT_ERROR) {
             xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_ERROR);
-            ESP_LOGI(TAG, "播放音频: 错误提示");
+            ESP_LOGI(TAG, "回应音频: 错误提示");
             esp_err_t ret = audio_player_play(AUDIO_TYPE_ERROR);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+                ESP_LOGE(TAG, "错误音频回应失败");
             }
         }
         else if (bits & AUDIO_EVENT_COMMAND_1) {
             xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_COMMAND_1);
-            ESP_LOGI(TAG, "播放音频: 命令1反馈");
+            ESP_LOGI(TAG, "回应音频: 命令1反馈");
             esp_err_t ret = audio_player_play(AUDIO_TYPE_COMMAND_1);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+                ESP_LOGE(TAG, "命令1音频回应失败");
             }
         }
         else if (bits & AUDIO_EVENT_COMMAND_2) {
             xEventGroupClearBits(s_audio_event_group, AUDIO_EVENT_COMMAND_2);
-            ESP_LOGI(TAG, "播放音频: 命令2反馈");
+            ESP_LOGI(TAG, "回应音频: 命令2反馈");
             esp_err_t ret = audio_player_play(AUDIO_TYPE_COMMAND_2);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "音频播放失败: %d", ret);
+                ESP_LOGE(TAG, "命令2音频回应失败");
             }
         }
     }
     
-    ESP_LOGI(TAG, "音频播放任务已退出");
+    ESP_LOGI(TAG, "回应音频播放任务已退出");
     s_audio_play_task_handle = NULL;
     vTaskDelete(NULL);
-}
-
-static void _play_response_audio(void)
-{
-    ESP_LOGI(TAG, "唤醒反馈：我在！");
-    
-    // 设置唤醒确认事件标志
-    xEventGroupSetBits(s_audio_event_group, AUDIO_EVENT_WAKEUP_CONFIRM);
 }
 
 static void audio_feed_task(void *arg)
@@ -162,15 +149,16 @@ static void speech_recognition_task(void *arg)
         // 获取AFE处理后的音频
         afe_fetch_result_t *res = s_afe_handle->fetch(s_afe_data);
         if (!res || res->ret_value == ESP_FAIL) {
-            ESP_LOGE(TAG, "fetch error!\n");
+            ESP_LOGE(TAG, "AFE获取结果失败!\n");
             continue;
         }
         
         // 检查唤醒状态
         if (res->wakeup_state == WAKENET_DETECTED) {
-            _play_response_audio();
-            is_wakenet_detected = true;
+            ESP_LOGI(TAG, "唤醒反馈：我在！");
             ESP_LOGI(TAG, "唤醒检测: model_index=%d, word_index=%d", res->wakenet_model_index, res->wake_word_index);
+            speech_recognition_trigger_audio(AUDIO_PLAY_WAKEUP_CONFIRM);
+            is_wakenet_detected = true;
         }
         
         // 如果已唤醒，进行命令词识别
@@ -180,10 +168,8 @@ static void speech_recognition_task(void *arg)
             if (mn_state == ESP_MN_STATE_DETECTED) {
                 esp_mn_results_t *mn_result = s_multinet->get_results(s_model_data_mn);
                 if (mn_result && mn_result->num > 0) {
-                    // 通过回调通知上层
-                    if (s_command_callback) {
-                        s_command_callback(mn_result->string);
-                    }
+                    // 通过回调处理命令
+                    _command_handler_execute(mn_result->string);
                 }
                 is_wakenet_detected = false;
                 
@@ -199,10 +185,8 @@ static void speech_recognition_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t speech_recognition_init(speech_command_callback_t callback)
+esp_err_t speech_recognition_init(void)
 {
-    s_command_callback = callback;
-    
     // 初始化音频播放器
     esp_err_t ret = audio_player_init();
     if (ret != ESP_OK) {
@@ -490,4 +474,40 @@ esp_err_t speech_recognition_trigger_audio(audio_play_type_t type)
     
     xEventGroupSetBits(s_audio_event_group, event_bit);
     return ESP_OK;
+}
+
+// 去除前导空格
+static const char *_skip_leading_space(const char *s)
+{
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') {
+        s++;
+    }
+    return s;
+}
+
+static void _command_handler_execute(const char *command)
+{
+    if (command == NULL) {
+        return;
+    }
+    
+    const char *cmd = _skip_leading_space(command);
+    
+    ESP_LOGI(TAG, "执行命令: '%s'", cmd);
+    
+    if (strcmp(cmd, "kai deng") == 0) {
+        ESP_LOGI(TAG, "开灯");
+        ws2812_led_start_rainbow();
+        // 触发命令2反馈音频
+        speech_recognition_trigger_audio(AUDIO_PLAY_COMMAND_2);
+    } else if (strcmp(cmd, "guan deng") == 0) {
+        ESP_LOGI(TAG, "关灯");
+        ws2812_led_clear();
+        // 触发命令1反馈音频
+        speech_recognition_trigger_audio(AUDIO_PLAY_COMMAND_1);
+    } else {
+        ESP_LOGW(TAG, "未识别的命令: '%s'", cmd);
+        // 触发错误提示音频
+        speech_recognition_trigger_audio(AUDIO_PLAY_ERROR);
+    }
 }

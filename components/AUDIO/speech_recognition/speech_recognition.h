@@ -22,9 +22,8 @@ typedef enum {
 
 /**
  * @brief 初始化语音识别模块
- * @param callback 命令识别回调函数
  */
-esp_err_t speech_recognition_init(speech_command_callback_t callback);
+esp_err_t speech_recognition_init(void);
 
 /**
  * @brief 启动语音识别

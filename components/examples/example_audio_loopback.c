@@ -1,4 +1,6 @@
 #include "examples.h"
+
+#if SELECTED_EXAMPLE == EXAMPLE_AUDIO_LOOPBACK
 #include "audio_pipeline.h"
 #include "esp_log.h"
 
@@ -6,7 +8,6 @@ static const char *TAG = "example_audio";
 
 void example_audio_loopback(void)
 {
-    ESP_LOGI(TAG, "=== 音频直通测试 ===");
     ESP_LOGI(TAG, "麦克风采集的声音会直接从扬声器播放");
     
     // 启动音频管道（CPU0）
@@ -14,3 +15,4 @@ void example_audio_loopback(void)
     
     ESP_LOGI(TAG, "音频直通已启动，对着麦克风说话试试");
 }
+#endif

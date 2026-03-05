@@ -1,4 +1,6 @@
 #include "examples.h"
+
+#ifdef SELECTED_EXAMPLE
 #include "esp_log.h"
 
 static const char *TAG = "examples_demo";
@@ -34,3 +36,4 @@ void examples_run_demo(void)
     ESP_LOGE(TAG, "请在 examples.h 中设置 SELECTED_EXAMPLE 宏");
 #endif
 }
+#endif

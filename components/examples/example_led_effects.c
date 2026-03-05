@@ -1,4 +1,6 @@
 #include "examples.h"
+
+#if SELECTED_EXAMPLE == EXAMPLE_LED_EFFECTS
 #include "ws2812_led.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -8,7 +10,7 @@ static const char *TAG = "example_led";
 
 void example_led_effects(void)
 {
-    ESP_LOGI(TAG, "=== LED 效果测试 ===");
+    ESP_LOGI(TAG, "ws2812_led 效果测试");
     
     // 初始化 LED
     ws2812_led_init();
@@ -28,3 +30,4 @@ void example_led_effects(void)
     ESP_LOGI(TAG, "彩虹效果");
     ws2812_led_start_rainbow();
 }
+#endif

@@ -1,14 +1,12 @@
 set(src_dirs
     audio_pipeline
     speech_recognition
-    command_handler
     audio_player
 )
 
 set(include_dirs
     audio_pipeline
     speech_recognition
-    command_handler
     audio_player
 )
 
