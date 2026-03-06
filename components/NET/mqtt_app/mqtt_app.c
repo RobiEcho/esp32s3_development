@@ -36,9 +36,21 @@ static void _mqtt_app_event_handler(void *arg, esp_event_base_t base, int32_t ev
         break;
 
     case MQTT_EVENT_DATA:
-        if (s_data_handler && event->data && event->data_len > 0) {
-            s_data_handler((const uint8_t *)event->data, event->data_len);
+        if (strncmp(event->topic, MQTT_APP_TOPIC_IMAGE, event->topic_len) == 0 
+        && strlen(MQTT_APP_TOPIC_IMAGE) == event->topic_len) {
+
+        if (event->data != NULL && event->data_len > 0 && event->total_data_len > 0) {
+
+            const uint8_t *data = (const uint8_t *)event->data;
+            size_t len = event->data_len;
+            uint32_t offset = event->current_data_offset;
+            uint32_t total_len = event->total_data_len;
+
+            if (s_data_handler) {
+                s_data_handler(data, len, offset, total_len);
+            }
         }
+    }
         break;
 
     case MQTT_EVENT_ERROR:

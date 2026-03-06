@@ -43,7 +43,7 @@ static void _swap_rgb565_bytes(uint16_t *buf, size_t pixel_count)
     }
 }
 
-static esp_err_t mqtt_app_image_handler(const uint8_t *data, size_t len)
+static esp_err_t mqtt_app_image_handler(const uint8_t *data, size_t len, uint32_t offset, uint32_t total_len)
 {
     if (data == NULL || len == 0) {
         ESP_LOGW(TAG, "接收到空图像数据");
