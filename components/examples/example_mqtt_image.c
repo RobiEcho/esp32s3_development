@@ -32,6 +32,7 @@ typedef struct {
 static pingpong_buf_t s_pingpong = {0};
 static SemaphoreHandle_t s_frame_ready_sem = NULL;
 static volatile uint8_t s_displaying_idx = 0xFF;
+static portMUX_TYPE s_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
 static void _swap_rgb565_bytes(uint16_t *buf, size_t pixel_count)
 {
@@ -53,11 +54,13 @@ static esp_err_t mqtt_app_image_handler(const uint8_t *data, size_t len, uint32_
 
 static bool IRAM_ATTR _st7789_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
+    portENTER_CRITICAL_ISR(&s_spinlock);
     uint8_t idx = s_displaying_idx;
     if (idx < 2) {
         s_pingpong.buf[idx].status = BUF_IDLE;
     }
     s_displaying_idx = 0xFF;
+    portEXIT_CRITICAL_ISR(&s_spinlock);
     return false;
 }
 
@@ -68,6 +71,7 @@ static void _image_decode_display_task(void *arg)
 
     while (1) {
         uint8_t decode_idx = 0xFF;
+        portENTER_CRITICAL(&s_spinlock);
         for (uint8_t i = 0; i < 2; i++) {
             if (s_pingpong.buf[i].status == BUF_IDLE) {
                 s_pingpong.buf[i].status = BUF_DECODING;
@@ -75,10 +79,11 @@ static void _image_decode_display_task(void *arg)
                 break;
             }
         }
+        portEXIT_CRITICAL(&s_spinlock);
         
         if (decode_idx == 0xFF) {
             // 没有空闲的显示缓冲区
-                vTaskDelay(pdMS_TO_TICKS(1));
+            vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
         
@@ -88,7 +93,9 @@ static void _image_decode_display_task(void *arg)
             if (ret != ESP_ERR_NOT_FOUND) {
                 ESP_LOGE(TAG, "图像解码失败");
             }
+            portENTER_CRITICAL(&s_spinlock);
             s_pingpong.buf[decode_idx].status = BUF_IDLE;
+            portEXIT_CRITICAL(&s_spinlock);
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
@@ -97,14 +104,21 @@ static void _image_decode_display_task(void *arg)
             _swap_rgb565_bytes(s_pingpong.buf[decode_idx].data, 240 * 240);
             
             // 标记为 READY
+            portENTER_CRITICAL(&s_spinlock);
             s_pingpong.buf[decode_idx].status = BUF_READY;
+            portEXIT_CRITICAL(&s_spinlock);
+            
             if (xSemaphoreGive(s_frame_ready_sem) != pdTRUE) {
                 ESP_LOGW(TAG, "显示任务繁忙，跳过此帧");
+                portENTER_CRITICAL(&s_spinlock);
                 s_pingpong.buf[decode_idx].status = BUF_IDLE;
+                portEXIT_CRITICAL(&s_spinlock);
             }
         } else {
             ESP_LOGW(TAG, "图像尺寸不符合要求 (期望: 240x240, 实际: %dx%d)，不显示", frame_info.width, frame_info.height);
+            portENTER_CRITICAL(&s_spinlock);
             s_pingpong.buf[decode_idx].status = BUF_IDLE;
+            portEXIT_CRITICAL(&s_spinlock);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -119,6 +133,7 @@ static void _st7789_display_task(void *arg)
         xSemaphoreTake(s_frame_ready_sem, portMAX_DELAY);
         
         uint8_t current_display_idx = 0xFF;
+        portENTER_CRITICAL(&s_spinlock);
         for (uint8_t i = 0; i < 2; i++) {
             if (s_pingpong.buf[i].status == BUF_READY) {
                 s_pingpong.buf[i].status = BUF_DISPLAYING;
@@ -126,13 +141,23 @@ static void _st7789_display_task(void *arg)
                 break;
             }
         }
+        portEXIT_CRITICAL(&s_spinlock);
         
         if (current_display_idx != 0xFF) {
-            
-            while (s_displaying_idx != 0xFF) { // 等待 DMA 空闲
-                vTaskDelay(pdMS_TO_TICKS(1));
+            // 等待 DMA 空闲并设置新的显示索引
+            bool dma_ready = false;
+            while (!dma_ready) {
+                portENTER_CRITICAL(&s_spinlock);
+                dma_ready = (s_displaying_idx == 0xFF);
+                if (dma_ready) {
+                    s_displaying_idx = current_display_idx;
+                }
+                portEXIT_CRITICAL(&s_spinlock);
+                
+                if (!dma_ready) {
+                    vTaskDelay(pdMS_TO_TICKS(1));
+                }
             }
-            s_displaying_idx = current_display_idx;
             st7789_lcd_draw_bitmap(0, 0, 240, 240, s_pingpong.buf[current_display_idx].data);
         }
     }
