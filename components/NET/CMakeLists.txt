@@ -2,12 +2,14 @@ set(src_dirs
     wifi_manager
     mqtt_app
     nvs_storage
+    udp_server
 )
 
 set(include_dirs
     wifi_manager
     mqtt_app
     nvs_storage
+    udp_server
 )
 
 set(requires

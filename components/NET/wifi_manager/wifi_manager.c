@@ -328,3 +328,27 @@ wifi_state_t wifi_get_state(void)
 {
     return s_wifi_state;
 }
+
+esp_err_t wifi_get_ipv4(char *ip_str, size_t len)
+{
+    if (!ip_str || len < 16) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_inited || !s_wifi_netif) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_wifi_state != WIFI_STATE_CONNECTED) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    esp_err_t err = esp_netif_get_ip_info(s_wifi_netif, &ip_info);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    snprintf(ip_str, len, IPSTR, IP2STR(&ip_info.ip));
+    return ESP_OK;
+}

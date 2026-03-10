@@ -36,4 +36,12 @@ esp_err_t wifi_connect(void);
  */
 wifi_state_t wifi_get_state(void);
 
+/**
+ * @brief 获取当前 IPv4 地址
+ * @param ip_str 输出参数，IP 地址字符串缓冲区
+ * @param len 缓冲区长度（建议至少 16 字节）
+ * @return ESP_OK 成功, 其他值表示失败
+ */
+esp_err_t wifi_get_ipv4(char *ip_str, size_t len);
+
 #endif
