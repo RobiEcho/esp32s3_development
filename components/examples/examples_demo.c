@@ -27,9 +27,9 @@ void examples_run_demo(void)
     ESP_LOGI(TAG, "启动示例 5：MQTT + MPU6050 测试");
     example_wifi_mqtt();
     
-#elif SELECTED_EXAMPLE == EXAMPLE_MQTT_IMAGE
-    ESP_LOGI(TAG, "启动示例 6：MQTT 图像接收测试");
-    example_mqtt_image();
+#elif SELECTED_EXAMPLE == EXAMPLE_MQTT_VIDEO
+    ESP_LOGI(TAG, "启动示例 6：MQTT 视频接收测试");
+    example_mqtt_video();
     
 #else
     ESP_LOGE(TAG, "错误：未选择有效的示例！");

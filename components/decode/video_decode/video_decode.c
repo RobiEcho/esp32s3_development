@@ -1,20 +1,17 @@
 #include "video_decode.h"
-#include "tjpgd.h"
+#include "esp_jpeg_common.h"
+#include "esp_jpeg_dec.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "video_decode";
 
 #define JPEG_BUFFER_SIZE (250 * 1024)  // 环形缓冲区大小，可存储多帧
 #define MAX_FRAME_SIZE   (24 * 1024)   // 单帧最大大小（用于跨边界拷贝）
-#define TJPGD_WORK_SIZE  (65 * 1024)   // TJpgDec 工作缓冲区大小（JD_FASTDECODE=2 需要 65KB）
-
-// JPEG 标记
-#define JPEG_SOI_MARKER 0xFFD8 // Start of Image 
-#define JPEG_EOI_MARKER 0xFFD9 // End of Image
 
 // 帧元数据结构
 typedef struct {
@@ -43,21 +40,14 @@ static uint32_t s_current_frame_total_len;  // 当前帧的总长度
 static size_t s_current_frame_start_pos;    // 当前帧在缓冲区中的起始位置
 static uint32_t s_current_frame_received;   // 当前帧已接收的字节数（预期的下一个偏移）
 
-static void *s_tjpgd_work_buffer = NULL;
-
 // 解码临时缓冲区（预分配，避免每帧 malloc/free）
 // 注意：不是线程安全的，确保只有一个任务调用 video_decode_process()
 static uint8_t *s_decode_temp_buffer = NULL;
 
-typedef struct {
-    const uint8_t *jpeg_data;  // JPEG 数据指针
-    size_t jpeg_len;           // JPEG 数据长度
-    size_t read_offset;        // 当前读取偏移
-    uint16_t *out_buffer;      // RGB565 输出缓冲区
-    uint16_t out_width;        // 输出宽度
-} tjpgd_context_t;
+// ESP_NEW_JPEG解码器句柄（全局复用）
+static jpeg_dec_handle_t s_jpeg_dec = NULL;
 
-static esp_err_t _decode_jpeg_data(const uint8_t *jpeg_data, size_t jpeg_len,
+static esp_err_t _decode_jpeg_data(uint8_t *jpeg_data, size_t jpeg_len,
                                     uint16_t *out_rgb565, size_t out_len,
                                     video_frame_info_t *frame_info);
 
@@ -106,10 +96,10 @@ esp_err_t video_decode_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    // 分配 TJpgDec 工作缓冲区
-    s_tjpgd_work_buffer = heap_caps_malloc(TJPGD_WORK_SIZE, MALLOC_CAP_SPIRAM);
-    if (s_tjpgd_work_buffer == NULL) {
-        ESP_LOGE(TAG, "TJpgDec 工作缓冲区分配失败");
+    // 分配解码临时缓冲区
+    s_decode_temp_buffer = heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM);
+    if (s_decode_temp_buffer == NULL) {
+        ESP_LOGE(TAG, "解码临时缓冲区分配失败");
         heap_caps_free(s_jpeg_buffer);
         s_jpeg_buffer = NULL;
         vSemaphoreDelete(s_mutex);
@@ -117,17 +107,25 @@ esp_err_t video_decode_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    // 分配解码临时缓冲区
-    s_decode_temp_buffer = heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM);
-    if (s_decode_temp_buffer == NULL) {
-        ESP_LOGE(TAG, "解码临时缓冲区分配失败");
-        heap_caps_free(s_tjpgd_work_buffer);
-        s_tjpgd_work_buffer = NULL;
+    // 初始化ESP_NEW_JPEG解码器
+    jpeg_dec_config_t config = {
+        .output_type = JPEG_PIXEL_FORMAT_RGB565_BE,  // RGB565大端输出(ST7789需要)
+        .scale = {.width = 0, .height = 0},          // 不缩放
+        .clipper = {.width = 0, .height = 0},        // 不裁剪
+        .rotate = JPEG_ROTATE_0D,                     // 不旋转
+        .block_enable = false,                        // 不使用块模式
+    };
+    
+    jpeg_error_t jpeg_ret = jpeg_dec_open(&config, &s_jpeg_dec);
+    if (jpeg_ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "JPEG解码器初始化失败: %d", jpeg_ret);
+        heap_caps_free(s_decode_temp_buffer);
+        s_decode_temp_buffer = NULL;
         heap_caps_free(s_jpeg_buffer);
         s_jpeg_buffer = NULL;
         vSemaphoreDelete(s_mutex);
         s_mutex = NULL;
-        return ESP_ERR_NO_MEM;
+        return ESP_FAIL;
     }
 
     s_write_pos = 0;
@@ -141,8 +139,8 @@ esp_err_t video_decode_init(void)
     s_current_frame_received = 0;
     s_inited = true;
     
-    ESP_LOGI(TAG, "环形缓冲区: %u KB, 工作缓冲区: %u KB, 解码缓冲区: %u KB", 
-             JPEG_BUFFER_SIZE / 1024, TJPGD_WORK_SIZE / 1024, MAX_FRAME_SIZE / 1024);
+    ESP_LOGI(TAG, "环形缓冲区: %u KB, 解码缓冲区: %u KB, JPEG解码器已初始化", 
+             JPEG_BUFFER_SIZE / 1024, MAX_FRAME_SIZE / 1024);
     return ESP_OK;
 }
 
@@ -158,14 +156,14 @@ esp_err_t video_decode_deinit(void)
 
     s_inited = false;
 
+    if (s_jpeg_dec) {
+        jpeg_dec_close(s_jpeg_dec);
+        s_jpeg_dec = NULL;
+    }
+
     if (s_jpeg_buffer) {
         heap_caps_free(s_jpeg_buffer);
         s_jpeg_buffer = NULL;
-    }
-
-    if (s_tjpgd_work_buffer) {
-        heap_caps_free(s_tjpgd_work_buffer);
-        s_tjpgd_work_buffer = NULL;
     }
 
     if (s_decode_temp_buffer) {
@@ -326,7 +324,7 @@ esp_err_t video_decode_process(uint16_t *out_rgb565, size_t out_len,
 
     xSemaphoreGive(s_mutex);
 
-    // // 解码时不持有锁，所以接收新数据和解码可以同时进行，不会互相阻塞。
+    // 解码时不持有锁，所以接收新数据和解码可以同时进行，不会互相阻塞。
     esp_err_t ret = _decode_jpeg_data(s_decode_temp_buffer, frame_len, out_rgb565, out_len, frame_info);
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
@@ -346,131 +344,54 @@ esp_err_t video_decode_process(uint16_t *out_rgb565, size_t out_len,
     return ret;
 }
 
-// TJpgDec 输入回调函数（流式读取）
-static size_t tjpgd_input_func(JDEC *jd, uint8_t *buff, size_t ndata)
-{
-    tjpgd_context_t *ctx = (tjpgd_context_t *)jd->device;
-    
-    if (!ctx) {
-        return 0;
-    }
-    
-    // 计算可读取的字节数
-    size_t remain = ctx->jpeg_len - ctx->read_offset;
-    size_t to_read = (ndata < remain) ? ndata : remain;
-    
-    if (buff && to_read > 0) {
-        // 拷贝数据到 TJpgDec 的缓冲区
-        memcpy(buff, ctx->jpeg_data + ctx->read_offset, to_read);
-        ctx->read_offset += to_read;
-    } else if (!buff) {
-        // 跳过数据
-        ctx->read_offset += to_read;
-    }
-    
-    return to_read;
-}
-
-// TJpgDec 输出回调函数（输出 RGB565 数据）
-static int tjpgd_output_func(JDEC *jd, void *bitmap, JRECT *rect)
-{
-    tjpgd_context_t *ctx = (tjpgd_context_t *)jd->device;
-    
-    if (!ctx || !bitmap || !rect) {
-        return 0;
-    }
-    
-    uint16_t *src = (uint16_t *)bitmap;
-    uint16_t *dst = ctx->out_buffer;
-    
-    // 计算输出位置并拷贝数据
-    uint16_t width = rect->right - rect->left + 1;
-    uint16_t height = rect->bottom - rect->top + 1;
-    
-    for (uint16_t y = 0; y < height; y++) {
-        uint16_t dst_y = rect->top + y;
-        uint16_t *dst_line = dst + dst_y * ctx->out_width + rect->left;
-        uint16_t *src_line = src + y * width;
-        memcpy(dst_line, src_line, width * sizeof(uint16_t));
-    }
-    
-    return 1;  // 继续解码
-}
-
-static esp_err_t _decode_jpeg_data(const uint8_t *jpeg_data, size_t jpeg_len,
+static esp_err_t _decode_jpeg_data(uint8_t *jpeg_data, size_t jpeg_len,
                                     uint16_t *out_rgb565, size_t out_len,
                                     video_frame_info_t *frame_info)
 {
-    if (!jpeg_data || jpeg_len == 0 || !out_rgb565) {
+    if (!jpeg_data || jpeg_len == 0 || !out_rgb565 || !s_jpeg_dec) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (!s_tjpgd_work_buffer) {
-        ESP_LOGE(TAG, "TJpgDec 工作缓冲区未初始化");
-        return ESP_ERR_INVALID_STATE;
-    }
-    // 校验 JPEG 帧头尾标记
+    // 基本长度检查
     if (jpeg_len < 4) {
         ESP_LOGE(TAG, "JPEG 数据太短 (长度: %u)", jpeg_len);
         return ESP_ERR_INVALID_ARG;
     }
 
-    // 检查 SOI 标记 (0xFFD8)
-    uint16_t soi_marker = (jpeg_data[0] << 8) | jpeg_data[1];
-    if (soi_marker != JPEG_SOI_MARKER) {
-        ESP_LOGE(TAG, "JPEG SOI 标记错误 (期望: 0x%04X, 实际: 0x%04X)", 
-                 JPEG_SOI_MARKER, soi_marker);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // 检查 EOI 标记 (0xFFD9)
-    uint16_t eoi_marker = (jpeg_data[jpeg_len - 2] << 8) | jpeg_data[jpeg_len - 1];
-    if (eoi_marker != JPEG_EOI_MARKER) {
-        ESP_LOGE(TAG, "JPEG EOI 标记错误 (期望: 0x%04X, 实际: 0x%04X)", 
-                 JPEG_EOI_MARKER, eoi_marker);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // 初始化解码上下文
-    tjpgd_context_t ctx = {
-        .jpeg_data = jpeg_data,
-        .jpeg_len = jpeg_len,
-        .read_offset = 0,
-        .out_buffer = out_rgb565,
-        .out_width = 0,  // 将在 jd_prepare 后设置
+    // 设置输入输出IO
+    jpeg_dec_io_t jpeg_io = {
+        .inbuf = jpeg_data,
+        .inbuf_len = jpeg_len,
+        .outbuf = (uint8_t *)out_rgb565,
     };
-
-    JDEC jd;
-    JRESULT res;
-
-    // 准备解码器（使用预分配的工作缓冲区）
-    res = jd_prepare(&jd, tjpgd_input_func, s_tjpgd_work_buffer, TJPGD_WORK_SIZE, &ctx);
-    if (res != JDR_OK) {
-        ESP_LOGE(TAG, "jd_prepare 失败: %d", res);
+    
+    jpeg_dec_header_info_t header_info = {0};
+    
+    // 解析JPEG头
+    jpeg_error_t ret = jpeg_dec_parse_header(s_jpeg_dec, &jpeg_io, &header_info);
+    if (ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "解析JPEG头失败: %d", ret);
         return ESP_FAIL;
     }
-
-    // 设置输出宽度
-    ctx.out_width = jd.width;
-
+    
     // 检查输出缓冲区大小
-    size_t required_size = jd.width * jd.height * sizeof(uint16_t);
+    size_t required_size = header_info.width * header_info.height * sizeof(uint16_t);
     if (out_len < required_size) {
         ESP_LOGE(TAG, "输出缓冲区不足 (需要: %u, 提供: %u)", required_size, out_len);
         return ESP_ERR_NO_MEM;
     }
-
-    // 解码（不缩放）
-    res = jd_decomp(&jd, tjpgd_output_func, 0);
-    if (res != JDR_OK) {
-        ESP_LOGE(TAG, "jd_decomp 失败: %d", res);
+    
+    // 执行解码
+    ret = jpeg_dec_process(s_jpeg_dec, &jpeg_io);
+    if (ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "JPEG解码失败: %d", ret);
         return ESP_FAIL;
     }
 
     // 填充帧信息
     if (frame_info) {
-        frame_info->width = jd.width;
-        frame_info->height = jd.height;
+        frame_info->width = header_info.width;
+        frame_info->height = header_info.height;
         frame_info->output_len = required_size;
     }
 

@@ -1,13 +1,13 @@
 set(src_dirs
-    TJpgDec
+    video_decode
 )
 
 set(include_dirs
-    TJpgDec
+    video_decode
 )
 
 set(requires
-
+    esp_new_jpeg
 )
 
 idf_component_register(
@@ -22,4 +22,3 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=format
     -Wno-format
 )
-

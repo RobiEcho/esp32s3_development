@@ -1,6 +1,6 @@
 #include "examples.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_MQTT_IMAGE
+#if SELECTED_EXAMPLE == EXAMPLE_MQTT_VIDEO
 #include "wifi_manager.h"
 #include "mqtt_app.h"
 #include "video_decode.h"
@@ -11,7 +11,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-static const char *TAG = "example_mqtt_image";
+static const char *TAG = "example_mqtt_video";
 
 typedef enum {
     BUF_IDLE = 0,
@@ -34,18 +34,10 @@ static SemaphoreHandle_t s_frame_ready_sem = NULL;
 static volatile uint8_t s_displaying_idx = 0xFF;
 static portMUX_TYPE s_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
-static void _swap_rgb565_bytes(uint16_t *buf, size_t pixel_count)
-{
-    for (size_t i = 0; i < pixel_count; i++) {
-        uint16_t pixel = buf[i];
-        buf[i] = ((pixel & 0xFF) << 8) | ((pixel >> 8) & 0xFF);
-    }
-}
-
-static esp_err_t mqtt_app_image_handler(const uint8_t *data, size_t len, uint32_t offset, uint32_t total_len)
+static esp_err_t mqtt_app_video_handler(const uint8_t *data, size_t len, uint32_t offset, uint32_t total_len)
 {
     if (data == NULL || len == 0) {
-        ESP_LOGW(TAG, "接收到无效图像数据");
+        ESP_LOGW(TAG, "接收到无效视频数据");
         return ESP_ERR_INVALID_ARG;
     }
     
@@ -64,7 +56,7 @@ static bool IRAM_ATTR _st7789_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, 
     return false;
 }
 
-static void _image_decode_display_task(void *arg)
+static void _video_decode_display_task(void *arg)
 {
     (void)arg;
     video_frame_info_t frame_info;
@@ -91,7 +83,7 @@ static void _image_decode_display_task(void *arg)
         
         if (ret != ESP_OK) {
             if (ret != ESP_ERR_NOT_FOUND) {
-                ESP_LOGE(TAG, "图像解码失败");
+                ESP_LOGE(TAG, "视频解码失败");
             }
             portENTER_CRITICAL(&s_spinlock);
             s_pingpong.buf[decode_idx].status = BUF_IDLE;
@@ -101,7 +93,7 @@ static void _image_decode_display_task(void *arg)
         }
 
         if (frame_info.width == 240 && frame_info.height == 240) {
-            _swap_rgb565_bytes(s_pingpong.buf[decode_idx].data, 240 * 240);
+            // esp_new_jpeg 直接输出 RGB565_BE 格式，无需字节序转换
             
             // 标记为 READY
             portENTER_CRITICAL(&s_spinlock);
@@ -115,7 +107,7 @@ static void _image_decode_display_task(void *arg)
                 portEXIT_CRITICAL(&s_spinlock);
             }
         } else {
-            ESP_LOGW(TAG, "图像尺寸不符合要求 (期望: 240x240, 实际: %dx%d)，不显示", frame_info.width, frame_info.height);
+            ESP_LOGW(TAG, "视频尺寸不符合要求 (期望: 240x240, 实际: %dx%d)，不显示", frame_info.width, frame_info.height);
             portENTER_CRITICAL(&s_spinlock);
             s_pingpong.buf[decode_idx].status = BUF_IDLE;
             portEXIT_CRITICAL(&s_spinlock);
@@ -163,7 +155,7 @@ static void _st7789_display_task(void *arg)
     }
 }
 
-void example_mqtt_image(void)
+void example_mqtt_video(void)
 {   
     esp_err_t ret;
     
@@ -250,7 +242,7 @@ void example_mqtt_image(void)
     }
     
     // 注册 MQTT 数据处理回调
-    ret = mqtt_app_register_data_handler(mqtt_app_image_handler);
+    ret = mqtt_app_register_data_handler(mqtt_app_video_handler);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "MQTT 回调注册失败: %s", esp_err_to_name(ret));
         return;
@@ -266,8 +258,8 @@ void example_mqtt_image(void)
     ESP_LOGI(TAG, "MQTT 已连接");
     ESP_LOGI(TAG, "LED: 绿色（MQTT 已连接）");
     
-    // 创建图像解码任务（CPU1，优先级 5）
-    BaseType_t task_ret = xTaskCreatePinnedToCore(_image_decode_display_task, "video_decode", 8192, NULL, 5, NULL, 1);
+    // 创建视频解码任务（CPU1，优先级 5）
+    BaseType_t task_ret = xTaskCreatePinnedToCore(_video_decode_display_task, "video_decode", 8192, NULL, 5, NULL, 1);
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "视频解码任务创建失败");
         return;
@@ -282,6 +274,6 @@ void example_mqtt_image(void)
     }
     ESP_LOGI(TAG, "ST7789 显示任务已创建（CPU0）");
     
-    ESP_LOGI(TAG, "等待接收 JPEG 图像数据...");
+    ESP_LOGI(TAG, "等待接收 JPEG 视频数据...");
 }
 #endif

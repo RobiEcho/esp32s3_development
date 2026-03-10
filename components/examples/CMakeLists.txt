@@ -11,7 +11,7 @@ set(requires
     NET
     APP
     AUDIO
-    VIDEO
+    decode
 )
 
 idf_component_register(

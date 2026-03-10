@@ -16,7 +16,7 @@ static const char *TAG = "ST7789";
 #define ST7789_RES_PIN               19                     // 复位引脚
 #define ST7789_DC_PIN                20                     // 数据/命令引脚
 #define ST7789_CS_PIN                -1                     // 片选引脚 (未使用)
-#define LCD_PIXEL_CLOCK_HZ           (40 * 1000 * 1000)     // SPI 时钟频率
+#define LCD_PIXEL_CLOCK_HZ           (80 * 1000 * 1000)     // SPI 时钟频率
 #define LCD_H_RES                    240                    // 水平分辨率
 #define LCD_V_RES                    240                    // 垂直分辨率
 
@@ -31,7 +31,7 @@ esp_err_t st7789_lcd_init(void)
         .miso_io_num = -1,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = (LCD_H_RES * LCD_V_RES / 8) * sizeof(uint16_t), // SPI DMA 最大传输大小（1/8 屏幕 = 30 行 = 14.4KB）
+        .max_transfer_sz = (LCD_H_RES * LCD_V_RES) * sizeof(uint16_t), // SPI DMA 最大传输大小（1/8 屏幕 = 30 行 = 14.4KB）
     };
     ESP_ERROR_CHECK(spi_bus_initialize(ST7789_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
@@ -42,7 +42,7 @@ esp_err_t st7789_lcd_init(void)
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = ST7789_SPI_MODE,
-        .trans_queue_depth = 10,        // SPI 传输队列深度（可排队的传输事务数量）
+        .trans_queue_depth = 8,        // SPI 传输队列深度（可排队的传输事务数量）
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)ST7789_SPI_HOST, &io_cfg, &s_io_handle));
 

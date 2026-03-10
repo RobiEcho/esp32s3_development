@@ -37,6 +37,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 2.3.0
+  espressif/esp_new_jpeg:
+    component_hash: 2f06f88e94fbc781b26a9be4291ff4ffc88596c90436a1e1358a7a38296b44ae
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    version: 1.0.0
   espressif/led_strip:
     component_hash: f0d1b7f93eb3ee57bcfd220656176b0b5616e1947f89ed44364555cf910c4840
     dependencies:
@@ -60,9 +76,10 @@ dependencies:
     version: 8.4.0
 direct_dependencies:
 - espressif/esp-sr
+- espressif/esp_new_jpeg
 - espressif/led_strip
 - idf
 - lvgl/lvgl
-manifest_hash: c1e7d358955d8a53d363dad4d4dc58e70b07906e45b87220cec3f5c6778e0814
+manifest_hash: 285cf07d72d5766580d206fbedab610f0f6b719047adace2ade5f9ea2ab66bba
 target: esp32s3
 version: 2.0.0
