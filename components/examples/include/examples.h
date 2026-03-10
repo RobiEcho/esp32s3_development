@@ -8,9 +8,10 @@
 #define EXAMPLE_SPEECH_RECOGNITION  3
 #define EXAMPLE_MQTT_MPU6050        4
 #define EXAMPLE_MQTT_VIDEO          5
+#define EXAMPLE_UDP_VIDEO           6
 
 // 选择要运行的示例
-#define SELECTED_EXAMPLE 5
+#define SELECTED_EXAMPLE 6
 
 void examples_run_demo(void);
 
@@ -26,6 +27,8 @@ void example_speech_recognition(void);
 void example_wifi_mqtt(void);
 #elif SELECTED_EXAMPLE == EXAMPLE_MQTT_VIDEO
 void example_mqtt_video(void);
+#elif SELECTED_EXAMPLE == EXAMPLE_UDP_VIDEO
+void example_udp_video(void);
 #endif
 
 #endif

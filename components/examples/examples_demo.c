@@ -31,6 +31,10 @@ void examples_run_demo(void)
     ESP_LOGI(TAG, "启动示例 6：MQTT 视频接收测试");
     example_mqtt_video();
     
+#elif SELECTED_EXAMPLE == EXAMPLE_UDP_VIDEO
+    ESP_LOGI(TAG, "启动示例 7：UDP 视频接收测试");
+    example_udp_video();
+    
 #else
     ESP_LOGE(TAG, "错误：未选择有效的示例！");
     ESP_LOGE(TAG, "请在 examples.h 中设置 SELECTED_EXAMPLE 宏");
