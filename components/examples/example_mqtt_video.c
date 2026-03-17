@@ -53,6 +53,7 @@ static bool IRAM_ATTR _st7789_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, 
     }
     s_displaying_idx = 0xFF;
     portEXIT_CRITICAL_ISR(&s_spinlock);
+    
     return false;
 }
 
@@ -60,8 +61,14 @@ static void _video_decode_display_task(void *arg)
 {
     (void)arg;
     video_frame_info_t frame_info;
+    
+    // 设置任务句柄，启用事件驱动模式
+    video_decode_set_decode_task_handle(xTaskGetCurrentTaskHandle());
 
     while (1) {
+        // 事件驱动：等待帧就绪通知，而不是轮询
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        
         uint8_t decode_idx = 0xFF;
         portENTER_CRITICAL(&s_spinlock);
         for (uint8_t i = 0; i < 2; i++) {
@@ -74,8 +81,7 @@ static void _video_decode_display_task(void *arg)
         portEXIT_CRITICAL(&s_spinlock);
         
         if (decode_idx == 0xFF) {
-            // 没有空闲的显示缓冲区
-            vTaskDelay(pdMS_TO_TICKS(1));
+            // 没有空闲的显示缓冲区，跳过此帧
             continue;
         }
         
@@ -88,7 +94,6 @@ static void _video_decode_display_task(void *arg)
             portENTER_CRITICAL(&s_spinlock);
             s_pingpong.buf[decode_idx].status = BUF_IDLE;
             portEXIT_CRITICAL(&s_spinlock);
-            vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
@@ -112,8 +117,6 @@ static void _video_decode_display_task(void *arg)
             s_pingpong.buf[decode_idx].status = BUF_IDLE;
             portEXIT_CRITICAL(&s_spinlock);
         }
-
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -136,20 +139,11 @@ static void _st7789_display_task(void *arg)
         portEXIT_CRITICAL(&s_spinlock);
         
         if (current_display_idx != 0xFF) {
-            // 等待 DMA 空闲并设置新的显示索引
-            bool dma_ready = false;
-            while (!dma_ready) {
-                portENTER_CRITICAL(&s_spinlock);
-                dma_ready = (s_displaying_idx == 0xFF);
-                if (dma_ready) {
-                    s_displaying_idx = current_display_idx;
-                }
-                portEXIT_CRITICAL(&s_spinlock);
-                
-                if (!dma_ready) {
-                    vTaskDelay(pdMS_TO_TICKS(1));
-                }
-            }
+            // 直接提交到SPI队列，非阻塞
+            portENTER_CRITICAL(&s_spinlock);
+            s_displaying_idx = current_display_idx;
+            portEXIT_CRITICAL(&s_spinlock);
+            
             st7789_lcd_draw_bitmap(0, 0, 240, 240, s_pingpong.buf[current_display_idx].data);
         }
     }

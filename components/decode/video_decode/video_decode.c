@@ -5,6 +5,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -29,7 +30,7 @@ static bool s_inited = false;
 static uint32_t s_dropped_frame_count = 0;  // 丢帧统计
 static SemaphoreHandle_t s_mutex = NULL;
 
-// 帧队列管理（标准环形队列实现）
+// 环形帧队列管理
 static frame_metadata_t s_frame_queue[MAX_FRAME_QUEUE];  // 帧元数据队列
 static volatile uint8_t s_frame_queue_head;              // 读指针
 static volatile uint8_t s_frame_queue_tail;              // 写指针
@@ -40,12 +41,13 @@ static uint32_t s_current_frame_total_len;  // 当前帧的总长度
 static size_t s_current_frame_start_pos;    // 当前帧在缓冲区中的起始位置
 static uint32_t s_current_frame_received;   // 当前帧已接收的字节数（预期的下一个偏移）
 
-// 解码临时缓冲区（预分配，避免每帧 malloc/free）
-// 注意：不是线程安全的，确保只有一个任务调用 video_decode_process()
-static uint8_t *s_decode_temp_buffer = NULL;
+// 解码临时缓冲区改为按需动态分配，不再使用静态指针
 
-// ESP_NEW_JPEG解码器句柄（全局复用）
+// ESP_NEW_JPEG解码器句柄
 static jpeg_dec_handle_t s_jpeg_dec = NULL;
+
+// 任务通知相关
+static TaskHandle_t s_decode_task_handle = NULL;
 
 static esp_err_t _decode_jpeg_data(uint8_t *jpeg_data, size_t jpeg_len,
                                     uint16_t *out_rgb565, size_t out_len,
@@ -75,6 +77,18 @@ static inline void _dequeue_frame(void)
     s_frame_queue_count--;
 }
 
+// 安全的丢帧策略 - 丢弃最新帧（当前正在接收的帧）
+static inline void _drop_current_frame(void)
+{
+    // 重置当前帧状态，丢弃正在接收的帧
+    s_current_frame_total_len = 0;
+    s_current_frame_received = 0;
+    // 回退write_pos到当前帧开始位置
+    s_write_pos = s_current_frame_start_pos;
+    s_dropped_frame_count++;
+    ESP_LOGW(TAG, "丢帧 #%u: 丢弃当前接收帧以腾出空间", s_dropped_frame_count);
+}
+
 esp_err_t video_decode_init(void)
 {
     if (s_inited) {
@@ -96,31 +110,18 @@ esp_err_t video_decode_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    // 分配解码临时缓冲区
-    s_decode_temp_buffer = heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM);
-    if (s_decode_temp_buffer == NULL) {
-        ESP_LOGE(TAG, "解码临时缓冲区分配失败");
-        heap_caps_free(s_jpeg_buffer);
-        s_jpeg_buffer = NULL;
-        vSemaphoreDelete(s_mutex);
-        s_mutex = NULL;
-        return ESP_ERR_NO_MEM;
-    }
-
     // 初始化ESP_NEW_JPEG解码器
     jpeg_dec_config_t config = {
         .output_type = JPEG_PIXEL_FORMAT_RGB565_BE,  // RGB565大端输出(ST7789需要)
         .scale = {.width = 0, .height = 0},          // 不缩放
         .clipper = {.width = 0, .height = 0},        // 不裁剪
-        .rotate = JPEG_ROTATE_0D,                     // 不旋转
-        .block_enable = false,                        // 不使用块模式
+        .rotate = JPEG_ROTATE_0D,                    // 不旋转
+        .block_enable = false,                       // 不使用块模式
     };
     
     jpeg_error_t jpeg_ret = jpeg_dec_open(&config, &s_jpeg_dec);
     if (jpeg_ret != JPEG_ERR_OK) {
         ESP_LOGE(TAG, "JPEG解码器初始化失败: %d", jpeg_ret);
-        heap_caps_free(s_decode_temp_buffer);
-        s_decode_temp_buffer = NULL;
         heap_caps_free(s_jpeg_buffer);
         s_jpeg_buffer = NULL;
         vSemaphoreDelete(s_mutex);
@@ -139,8 +140,8 @@ esp_err_t video_decode_init(void)
     s_current_frame_received = 0;
     s_inited = true;
     
-    ESP_LOGI(TAG, "环形缓冲区: %u KB, 解码缓冲区: %u KB, JPEG解码器已初始化", 
-             JPEG_BUFFER_SIZE / 1024, MAX_FRAME_SIZE / 1024);
+    ESP_LOGI(TAG, "环形缓冲区: %u KB, JPEG解码器已初始化", 
+             JPEG_BUFFER_SIZE / 1024);
     return ESP_OK;
 }
 
@@ -164,11 +165,6 @@ esp_err_t video_decode_deinit(void)
     if (s_jpeg_buffer) {
         heap_caps_free(s_jpeg_buffer);
         s_jpeg_buffer = NULL;
-    }
-
-    if (s_decode_temp_buffer) {
-        heap_caps_free(s_decode_temp_buffer);
-        s_decode_temp_buffer = NULL;
     }
 
     if (s_mutex) {
@@ -197,10 +193,8 @@ esp_err_t video_decode_push_data(const uint8_t *data, size_t len, uint32_t offse
         }
 
         if (_is_queue_full()) {
-            s_dropped_frame_count++;
-            ESP_LOGW(TAG, "丢帧 #%u: 帧队列已满", s_dropped_frame_count);
-            xSemaphoreGive(s_mutex);
-            return ESP_ERR_NO_MEM;
+            // 安全的丢帧策略：丢弃当前正在接收的帧
+            _drop_current_frame();
         }
 
         s_current_frame_total_len = total_len;
@@ -269,6 +263,15 @@ esp_err_t video_decode_push_data(const uint8_t *data, size_t len, uint32_t offse
         // 重置当前帧
         s_current_frame_total_len = 0;
         s_current_frame_received = 0;
+        
+        // 通知解码任务有新帧可用
+        if (s_decode_task_handle) {
+            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+            vTaskNotifyGiveFromISR(s_decode_task_handle, &xHigherPriorityTaskWoken);
+            if (xHigherPriorityTaskWoken) {
+                portYIELD_FROM_ISR();
+            }
+        }
     } else if (offset + len > total_len) {
         // 数据长度异常，超过了总长度
         s_dropped_frame_count++;
@@ -307,25 +310,43 @@ esp_err_t video_decode_process(uint16_t *out_rgb565, size_t out_len,
 
     // 检查帧大小
     if (frame_len > MAX_FRAME_SIZE) {
-        ESP_LOGE(TAG, "帧大小超过临时缓冲区 (%u > %u)", frame_len, MAX_FRAME_SIZE);
+        ESP_LOGE(TAG, "帧大小超过最大限制 (%u > %u)", frame_len, MAX_FRAME_SIZE);
         xSemaphoreGive(s_mutex);
         return ESP_ERR_INVALID_SIZE;
     }
 
+    uint8_t *jpeg_data_ptr;
+    uint8_t *temp_buffer = NULL;  // 临时缓冲区指针
+    
+    // 零拷贝优化：判断帧是否跨越环形缓冲区边界
     if (frame_start + frame_len <= JPEG_BUFFER_SIZE) {
-        // 不跨边界
-        memcpy(s_decode_temp_buffer, s_jpeg_buffer + frame_start, frame_len);
+        // 不跨界：零拷贝，直接使用环形缓冲区指针
+        jpeg_data_ptr = s_jpeg_buffer + frame_start;
+        ESP_LOGD(TAG, "零拷贝解码：帧不跨界，直接使用缓冲区指针");
     } else {
-        // 跨边界
+        // 跨界：按需分配临时缓冲区，大小等于JPEG帧大小
+        temp_buffer = heap_caps_malloc(frame_len, MALLOC_CAP_INTERNAL);
+        if (temp_buffer == NULL) {
+            ESP_LOGW(TAG, "内部RAM不足，回退到SPIRAM分配临时缓冲区");
+            temp_buffer = heap_caps_malloc(frame_len, MALLOC_CAP_SPIRAM);
+            if (temp_buffer == NULL) {
+                ESP_LOGE(TAG, "临时缓冲区分配失败 (大小: %u)", frame_len);
+                xSemaphoreGive(s_mutex);
+                return ESP_ERR_NO_MEM;
+            }
+        }
+        
+        jpeg_data_ptr = temp_buffer;
         size_t first_part = JPEG_BUFFER_SIZE - frame_start;
-        memcpy(s_decode_temp_buffer, s_jpeg_buffer + frame_start, first_part);
-        memcpy(s_decode_temp_buffer + first_part, s_jpeg_buffer, frame_len - first_part);
+        memcpy(jpeg_data_ptr, s_jpeg_buffer + frame_start, first_part);
+        memcpy(jpeg_data_ptr + first_part, s_jpeg_buffer, frame_len - first_part);
+        ESP_LOGD(TAG, "跨界拷贝：帧跨越边界，动态分配缓冲区 (大小: %u)", frame_len);
     }
 
     xSemaphoreGive(s_mutex);
 
     // 解码时不持有锁，所以接收新数据和解码可以同时进行，不会互相阻塞。
-    esp_err_t ret = _decode_jpeg_data(s_decode_temp_buffer, frame_len, out_rgb565, out_len, frame_info);
+    esp_err_t ret = _decode_jpeg_data(jpeg_data_ptr, frame_len, out_rgb565, out_len, frame_info);
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
 
@@ -341,6 +362,12 @@ esp_err_t video_decode_process(uint16_t *out_rgb565, size_t out_len,
     }
 
     xSemaphoreGive(s_mutex);
+    
+    // 释放临时缓冲区（如果有分配的话）
+    if (temp_buffer) {
+        heap_caps_free(temp_buffer);
+    }
+    
     return ret;
 }
 
@@ -396,4 +423,11 @@ static esp_err_t _decode_jpeg_data(uint8_t *jpeg_data, size_t jpeg_len,
     }
 
     return ESP_OK;
+}
+
+// 任务通知相关函数
+void video_decode_set_decode_task_handle(TaskHandle_t task_handle)
+{
+    s_decode_task_handle = task_handle;
+    ESP_LOGI(TAG, "解码任务句柄已设置，启用事件驱动模式");
 }

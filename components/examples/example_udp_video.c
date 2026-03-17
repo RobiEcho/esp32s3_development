@@ -335,7 +335,6 @@ static void decode_task(void *arg)
 
     while (1) {
         if (xQueueReceive(s_decode_queue, &frame, portMAX_DELAY) != pdTRUE) {
-            vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
@@ -418,7 +417,6 @@ static void decode_task(void *arg)
             s_display_buf[decode_idx].status = BUF_IDLE;
             portEXIT_CRITICAL(&s_spinlock);
         }
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -443,20 +441,11 @@ static void display_task(void *arg)
         portEXIT_CRITICAL(&s_spinlock);
 
         if (display_idx != 0xFF) {
-            // 等待 DMA 空闲并设置新的显示索引
-            bool dma_ready = false;
-            while (!dma_ready) {
-                portENTER_CRITICAL(&s_spinlock);
-                dma_ready = (s_displaying_idx == 0xFF);
-                if (dma_ready) {
-                    s_displaying_idx = display_idx;
-                }
-                portEXIT_CRITICAL(&s_spinlock);
-                
-                if (!dma_ready) {
-                    vTaskDelay(pdMS_TO_TICKS(1));
-                }
-            }
+            // 直接提交到SPI队列，非阻塞
+            portENTER_CRITICAL(&s_spinlock);
+            s_displaying_idx = display_idx;
+            portEXIT_CRITICAL(&s_spinlock);
+            
             st7789_lcd_draw_bitmap(0, 0, 240, 240, s_display_buf[display_idx].data);
         }
     }
