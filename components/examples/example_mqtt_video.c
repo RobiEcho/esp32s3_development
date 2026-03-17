@@ -67,7 +67,7 @@ static void _video_decode_display_task(void *arg)
 
     while (1) {
         // 事件驱动：等待帧就绪通知，而不是轮询
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
         
         uint8_t decode_idx = 0xFF;
         portENTER_CRITICAL(&s_spinlock);

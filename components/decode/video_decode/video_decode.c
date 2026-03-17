@@ -266,11 +266,7 @@ esp_err_t video_decode_push_data(const uint8_t *data, size_t len, uint32_t offse
         
         // 通知解码任务有新帧可用
         if (s_decode_task_handle) {
-            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-            vTaskNotifyGiveFromISR(s_decode_task_handle, &xHigherPriorityTaskWoken);
-            if (xHigherPriorityTaskWoken) {
-                portYIELD_FROM_ISR();
-            }
+            xTaskNotifyGive(s_decode_task_handle);
         }
     } else if (offset + len > total_len) {
         // 数据长度异常，超过了总长度
