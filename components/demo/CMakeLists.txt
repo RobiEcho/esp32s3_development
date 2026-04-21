@@ -1,15 +1,21 @@
 set(src_dirs
     .
+    demo_audio_loopback
+    demo_led_effects
+    demo_lvgl_display
+    demo_mqtt_mpu6050
+    demo_net_video
+    demo_speech_recognition
 )
 
 set(include_dirs
-    include
+    .
 )
 
 set(requires
     BSP
     NET
-    APP
+    my_lvgl
     AUDIO
     decode
 )

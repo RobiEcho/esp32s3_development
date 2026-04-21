@@ -1,15 +1,15 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_LVGL_DISPLAY
+#if SELECTED_DEMO == DEMO_LVGL_DISPLAY
 #include "lvgl_port.h"
 #include "lvgl_demo_ui.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "example_lvgl";
+static const char *TAG = "demo_lvgl";
 
-void example_lvgl_display(void)
+void demo_lvgl_display(void)
 {
     ESP_LOGI(TAG, "LVGL 显示测试");
     

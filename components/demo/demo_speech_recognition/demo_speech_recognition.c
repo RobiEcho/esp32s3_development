@@ -1,13 +1,13 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_SPEECH_RECOGNITION
+#if SELECTED_DEMO == DEMO_SPEECH_RECOGNITION
 #include "speech_recognition.h"
 #include "ws2812_led.h"
 #include "esp_log.h"
 
-static const char *TAG = "example_speech";
+static const char *TAG = "demo_speech";
 
-void example_speech_recognition(void)
+void demo_speech_recognition(void)
 {    
     // 初始化 LED
     ws2812_led_init();

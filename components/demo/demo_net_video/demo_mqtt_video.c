@@ -1,6 +1,6 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_MQTT_VIDEO
+#if SELECTED_DEMO == DEMO_MQTT_VIDEO
 #include "wifi_manager.h"
 #include "mqtt_app.h"
 #include "video_decode.h"
@@ -11,7 +11,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-static const char *TAG = "example_mqtt_video";
+static const char *TAG = "demo_mqtt_video";
 
 typedef enum {
     BUF_IDLE = 0,
@@ -155,7 +155,7 @@ static void _st7789_display_task(void *arg)
     }
 }
 
-void example_mqtt_video(void)
+void demo_mqtt_video(void)
 {   
     esp_err_t ret;
     

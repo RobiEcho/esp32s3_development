@@ -1,6 +1,6 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_MQTT_MPU6050
+#if SELECTED_DEMO == DEMO_MQTT_MPU6050
 #include "wifi_manager.h"
 #include "mqtt_app.h"
 #include "mqtt_app_config.h"
@@ -12,7 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 
-static const char *TAG = "mqtt_mpu6050";
+static const char *TAG = "demo_mqtt_mpu6050";
 
 // MPU6050 数据发布任务
 static void mpu6050_mqtt_task(void *arg)
@@ -57,7 +57,7 @@ static void mpu6050_mqtt_task(void *arg)
     }
 }
 
-void example_wifi_mqtt(void)
+void demo_wifi_mqtt(void)
 {
     ESP_LOGI(TAG, "=== WiFi + MQTT + MPU6050 测试 ===");
     

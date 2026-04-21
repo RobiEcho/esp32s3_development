@@ -1,14 +1,14 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_LED_EFFECTS
+#if SELECTED_DEMO == DEMO_LED_EFFECTS
 #include "ws2812_led.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "example_led";
+static const char *TAG = "demo_led";
 
-void example_led_effects(void)
+void demo_led_effects(void)
 {
     ESP_LOGI(TAG, "ws2812_led 效果测试");
     

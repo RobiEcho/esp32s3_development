@@ -1,12 +1,12 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_AUDIO_LOOPBACK
+#if SELECTED_DEMO == DEMO_AUDIO_LOOPBACK
 #include "audio_pipeline.h"
 #include "esp_log.h"
 
-static const char *TAG = "example_audio";
+static const char *TAG = "demo_audio";
 
-void example_audio_loopback(void)
+void demo_audio_loopback(void)
 {
     ESP_LOGI(TAG, "麦克风采集的声音会直接从扬声器播放");
     

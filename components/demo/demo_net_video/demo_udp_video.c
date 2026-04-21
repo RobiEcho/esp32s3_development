@@ -1,6 +1,6 @@
-#include "examples.h"
+#include "demo.h"
 
-#if SELECTED_EXAMPLE == EXAMPLE_UDP_VIDEO
+#if SELECTED_DEMO == DEMO_UDP_VIDEO
 #include "wifi_manager.h"
 #include "udp_server.h"
 #include "st7789_lcd.h"
@@ -16,7 +16,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 
-static const char *TAG = "udp_video";
+static const char *TAG = "demo_udp_video";
 
 #define UDP_PORT 8888                   // UDP服务器监听端口
 #define MAX_CHUNKS 30                   // 单帧最大分片数量
@@ -30,10 +30,10 @@ static const char *TAG = "udp_video";
 typedef struct __attribute__((packed)) {
     uint32_t frame_id;              // 帧ID
     uint32_t chunk_index;           // 当前分片索引
-    uint32_t total_chunks;          // 总分片数
-    uint32_t total_size;            // 完整JPEG大小(字节)
     uint32_t chunk_offset;          // 当前分片在完整数据中的偏移
     uint32_t data_len;              // 当前分片数据长度
+    uint32_t total_chunks;          // 总分片数
+    uint32_t total_size;            // 完整JPEG大小(字节)
 } udp_header_t;
 
 // JPEG帧缓冲区（缓冲区+状态合并）
@@ -462,7 +462,7 @@ static void display_task(void *arg)
     }
 }
 
-void example_udp_video(void)
+void demo_udp_video(void)
 {
     esp_err_t ret;
 
