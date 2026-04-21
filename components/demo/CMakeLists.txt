@@ -18,6 +18,7 @@ set(requires
     my_lvgl
     AUDIO
     decode
+    cJSON
 )
 
 idf_component_register(

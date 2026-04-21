@@ -9,8 +9,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "cJSON.h"
 #include <string.h>
-#include <stdio.h>
 
 static const char *TAG = "demo_mqtt_mpu6050";
 
@@ -19,7 +19,6 @@ static void mpu6050_mqtt_task(void *arg)
 {
     mpu6050_raw_data_t raw_data;
     mpu6050_data_t converted_data;
-    char mqtt_payload[256];
     
     ESP_LOGI(TAG, "MPU6050 数据发布任务已启动");
     
@@ -30,20 +29,40 @@ static void mpu6050_mqtt_task(void *arg)
             if (mpu6050_convert_data(&raw_data, &converted_data) == ESP_OK) {
                 // 检查 MQTT 是否已连接
                 if (mqtt_app_is_connected()) {
-                    // 构造 JSON 格式的 MQTT 消息
-                    snprintf(mqtt_payload, sizeof(mqtt_payload),
-                            "{\"gyro\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f},"
-                            "\"accel\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}}",
-                            converted_data.gyro_x, converted_data.gyro_y, converted_data.gyro_z,
-                            converted_data.accel_x, converted_data.accel_y, converted_data.accel_z);
+                    // 使用 cJSON 构造 JSON 消息
+                    cJSON *root = cJSON_CreateObject();
                     
-                    // 发布到 MQTT 主题
-                    int ret = mqtt_app_publish(MQTT_APP_TOPIC_MPU6050, mqtt_payload, strlen(mqtt_payload), 0);
-                    if (ret < 0) {
-                        ESP_LOGW(TAG, "MQTT 发送失败");
-                    } else {
-                        ESP_LOGI(TAG, "已发布: %s", mqtt_payload);
+                    // 添加陀螺仪数据
+                    cJSON *gyro = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(gyro, "x", converted_data.gyro_x);
+                    cJSON_AddNumberToObject(gyro, "y", converted_data.gyro_y);
+                    cJSON_AddNumberToObject(gyro, "z", converted_data.gyro_z);
+                    cJSON_AddItemToObject(root, "gyro", gyro);
+                    
+                    // 添加加速度计数据
+                    cJSON *accel = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(accel, "x", converted_data.accel_x);
+                    cJSON_AddNumberToObject(accel, "y", converted_data.accel_y);
+                    cJSON_AddNumberToObject(accel, "z", converted_data.accel_z);
+                    cJSON_AddItemToObject(root, "accel", accel);
+                    
+                    // 转换为字符串
+                    char *mqtt_payload = cJSON_PrintUnformatted(root);
+                    if (mqtt_payload != NULL) {
+                        // 发布到 MQTT 主题
+                        int ret = mqtt_app_publish(MQTT_APP_TOPIC_MPU6050, mqtt_payload, strlen(mqtt_payload), 0);
+                        if (ret < 0) {
+                            ESP_LOGW(TAG, "MQTT 发送失败");
+                        } else {
+                            ESP_LOGI(TAG, "已发布: %s", mqtt_payload);
+                        }
+                        
+                        // 释放 JSON 字符串内存
+                        cJSON_free(mqtt_payload);
                     }
+                    
+                    // 释放 JSON 对象
+                    cJSON_Delete(root);
                 } else {
                     ESP_LOGW(TAG, "MQTT 未连接，跳过发送");
                 }

@@ -464,23 +464,11 @@ static void display_task(void *arg)
 
 void demo_udp_video(void)
 {
-    esp_err_t ret;
-
     ws2812_led_init();
     ws2812_led_set_color(30, 0, 0);
 
-    ret = st7789_lcd_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "LCD初始化失败");
-        return;
-    }
-
-    // 初始化JPEG帧缓冲区池
-    ret = jpeg_frame_pool_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "JPEG帧池初始化失败");
-        return;
-    }
+    ESP_ERROR_CHECK(st7789_lcd_init());
+    ESP_ERROR_CHECK(jpeg_frame_pool_init());
 
     // 分配显示缓冲区
     s_display_buf[0].data = heap_caps_malloc(240 * 240 * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
@@ -495,7 +483,6 @@ void demo_udp_video(void)
     // 创建队列
     s_decode_queue = xQueueCreate(5, sizeof(jpeg_frame_t));
     s_frame_ready_sem = xSemaphoreCreateBinary();
-
     if (!s_decode_queue || !s_frame_ready_sem) {
         ESP_LOGE(TAG, "队列创建失败");
         return;
@@ -503,11 +490,11 @@ void demo_udp_video(void)
 
     // 初始化ESP_NEW_JPEG解码器
     jpeg_dec_config_t config = {
-        .output_type = JPEG_PIXEL_FORMAT_RGB565_BE,   // RGB565大端输出(ST7789需要)
-        .scale = {.width = 0, .height = 0},           // 不缩放
-        .clipper = {.width = 0, .height = 0},         // 不裁剪
-        .rotate = JPEG_ROTATE_0D,                     // 不旋转
-        .block_enable = false,                        // 不使用块模式
+        .output_type = JPEG_PIXEL_FORMAT_RGB565_BE,
+        .scale = {.width = 0, .height = 0},
+        .clipper = {.width = 0, .height = 0},
+        .rotate = JPEG_ROTATE_0D,
+        .block_enable = false,
     };
     
     jpeg_error_t jpeg_ret = jpeg_dec_open(&config, &s_jpeg_dec);
@@ -517,17 +504,8 @@ void demo_udp_video(void)
     }
     ESP_LOGI(TAG, "JPEG解码器初始化完成");
 
-    ret = st7789_lcd_register_trans_done_cb(st7789_trans_done_cb, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "DMA回调注册失败");
-        return;
-    }
-
-    ret = wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi启动失败");
-        return;
-    }
+    ESP_ERROR_CHECK(st7789_lcd_register_trans_done_cb(st7789_trans_done_cb, NULL));
+    ESP_ERROR_CHECK(wifi_start());
 
     while (wifi_get_state() != WIFI_STATE_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -540,11 +518,7 @@ void demo_udp_video(void)
         ESP_LOGI(TAG, "IP: %s", ip_str);
     }
 
-    ret = udp_server_start(UDP_PORT, udp_recv_handler);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UDP服务器启动失败");
-        return;
-    }
+    ESP_ERROR_CHECK(udp_server_start(UDP_PORT, udp_recv_handler));
 
     ws2812_led_set_color(0, 30, 0);
 

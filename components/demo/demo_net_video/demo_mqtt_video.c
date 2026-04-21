@@ -157,8 +157,6 @@ static void _st7789_display_task(void *arg)
 
 void demo_mqtt_video(void)
 {   
-    esp_err_t ret;
-    
     // 初始化 LED（红色：启动中）
     ws2812_led_init();
     ws2812_led_set_color(30, 0, 0);
@@ -166,11 +164,7 @@ void demo_mqtt_video(void)
     
     // 初始化 ST7789 LCD
     ESP_LOGI(TAG, "初始化 ST7789 LCD...");
-    ret = st7789_lcd_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "ST7789 LCD 初始化失败: %s", esp_err_to_name(ret));
-        return;
-    }
+    ESP_ERROR_CHECK(st7789_lcd_init());
     ESP_LOGI(TAG, "ST7789 LCD 初始化完成");
     
     // 分配 RGB565 双缓冲区
@@ -178,8 +172,6 @@ void demo_mqtt_video(void)
     s_pingpong.buf[1].data = heap_caps_malloc(240 * 240 * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     if (s_pingpong.buf[0].data == NULL || s_pingpong.buf[1].data == NULL) {
         ESP_LOGE(TAG, "RGB565 缓冲区分配失败");
-        if (s_pingpong.buf[0].data) heap_caps_free(s_pingpong.buf[0].data);
-        if (s_pingpong.buf[1].data) heap_caps_free(s_pingpong.buf[1].data);
         return;
     }
     s_pingpong.buf[0].status = BUF_IDLE;
@@ -190,38 +182,18 @@ void demo_mqtt_video(void)
     s_frame_ready_sem = xSemaphoreCreateBinary();
     if (s_frame_ready_sem == NULL) {
         ESP_LOGE(TAG, "帧就绪信号量创建失败");
-        heap_caps_free(s_pingpong.buf[0].data);
-        heap_caps_free(s_pingpong.buf[1].data);
         return;
     }
     
     // DMA 传输完成回调
-    ret = st7789_lcd_register_trans_done_cb(_st7789_trans_done_cb, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "DMA 回调注册失败: %s", esp_err_to_name(ret));
-        vSemaphoreDelete(s_frame_ready_sem);
-        heap_caps_free(s_pingpong.buf[0].data);
-        heap_caps_free(s_pingpong.buf[1].data);
-        return;
-    }
+    ESP_ERROR_CHECK(st7789_lcd_register_trans_done_cb(_st7789_trans_done_cb, NULL));
     
     // 初始化视频解码模块
-    ret = video_decode_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "视频解码初始化失败: %s", esp_err_to_name(ret));
-        vSemaphoreDelete(s_frame_ready_sem);
-        heap_caps_free(s_pingpong.buf[0].data);
-        heap_caps_free(s_pingpong.buf[1].data);
-        return;
-    }
+    ESP_ERROR_CHECK(video_decode_init());
     
     // 启动 WiFi
     ESP_LOGI(TAG, "连接 WiFi...");
-    ret = wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi 启动失败: %s", esp_err_to_name(ret));
-        return;
-    }
+    ESP_ERROR_CHECK(wifi_start());
     
     // 等待 WiFi 连接
     while (wifi_get_state() != WIFI_STATE_CONNECTED) {
@@ -230,23 +202,12 @@ void demo_mqtt_video(void)
     
     // WiFi 连接成功（黄色）
     ws2812_led_set_color(30, 30, 0);
-    ESP_LOGI(TAG, "WiFi 已连接");
-    ESP_LOGI(TAG, "LED: 黄色（WiFi 已连接）");
+    ESP_LOGI(TAG, "WiFi 已连接, LED: 黄色");
     
     // 初始化 MQTT
     ESP_LOGI(TAG, "初始化 MQTT...");
-    ret = mqtt_app_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "MQTT 初始化失败: %s", esp_err_to_name(ret));
-        return;
-    }
-    
-    // 注册 MQTT 数据处理回调
-    ret = mqtt_app_register_data_handler(mqtt_app_video_handler);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "MQTT 回调注册失败: %s", esp_err_to_name(ret));
-        return;
-    }
+    ESP_ERROR_CHECK(mqtt_app_init());
+    ESP_ERROR_CHECK(mqtt_app_register_data_handler(mqtt_app_video_handler));
     
     // 等待 MQTT 连接
     while (!mqtt_app_is_connected()) {
@@ -255,8 +216,7 @@ void demo_mqtt_video(void)
     
     // MQTT 连接成功（绿色）
     ws2812_led_set_color(0, 30, 0);
-    ESP_LOGI(TAG, "MQTT 已连接");
-    ESP_LOGI(TAG, "LED: 绿色（MQTT 已连接）");
+    ESP_LOGI(TAG, "MQTT 已连接, LED: 绿色");
     
     // 创建视频解码任务（CPU1，优先级 5）
     BaseType_t task_ret = xTaskCreatePinnedToCore(_video_decode_display_task, "video_decode", 8192, NULL, 5, NULL, 1);
