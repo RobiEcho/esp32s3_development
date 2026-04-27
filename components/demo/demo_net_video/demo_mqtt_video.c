@@ -4,236 +4,169 @@
 #include "wifi_manager.h"
 #include "mqtt_app.h"
 #include "video_decode.h"
+#include "pingpong_buf.h"
 #include "st7789_lcd.h"
 #include "ws2812_led.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
 static const char *TAG = "demo_mqtt_video";
 
-typedef enum {
-    BUF_IDLE = 0,
-    BUF_DECODING,
-    BUF_READY,
-    BUF_DISPLAYING
-} buf_status_t;
-
-typedef struct {
-    uint16_t *data;                    // RGB565 数据缓冲区
-    volatile buf_status_t status;      // 缓冲区状态
-} frame_buffer_t;
-
-typedef struct {
-    frame_buffer_t buf[2];
-} pingpong_buf_t;
-
-static pingpong_buf_t s_pingpong = {0};
+// ================ 全局句柄 ================
+static pingpong_buf_t* s_ppb = NULL;
 static SemaphoreHandle_t s_frame_ready_sem = NULL;
-static volatile uint8_t s_displaying_idx = 0xFF;
-static portMUX_TYPE s_spinlock = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_dma_idle_sem = NULL;
+static volatile uint8_t s_current_dma_idx = 0xFF;
 
+// ================ 统计信息 ================
+static volatile uint32_t s_frame_decoded = 0;
+static volatile uint32_t s_frame_displayed = 0;
+static volatile uint32_t s_frame_dropped = 0;
+
+// ================ 回调函数 ================
+
+/**
+ * @brief MQTT 视频数据回调
+ */
 static esp_err_t mqtt_app_video_handler(const uint8_t *data, size_t len, uint32_t offset, uint32_t total_len)
 {
-    if (data == NULL || len == 0) {
-        ESP_LOGW(TAG, "接收到无效视频数据");
-        return ESP_ERR_INVALID_ARG;
-    }
-    
+    if (data == NULL || len == 0) return ESP_ERR_INVALID_ARG;
     return video_decode_push_data(data, len, offset, total_len);
 }
 
+/**
+ * @brief LCD DMA 传输完成中断回调 (ISR Context)
+ */
 static bool IRAM_ATTR _st7789_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
-    portENTER_CRITICAL_ISR(&s_spinlock);
-    uint8_t idx = s_displaying_idx;
-    if (idx < 2) {
-        s_pingpong.buf[idx].status = BUF_IDLE;
+    BaseType_t high_task_wakeup = pdFALSE;
+
+    if (s_current_dma_idx != 0xFF) {
+        ppb_release(s_ppb, s_current_dma_idx, PPB_CONTEXT_ISR);
+        s_current_dma_idx = 0xFF;
     }
-    s_displaying_idx = 0xFF;
-    portEXIT_CRITICAL_ISR(&s_spinlock);
-    return false;
+
+    xSemaphoreGiveFromISR(s_dma_idle_sem, &high_task_wakeup);
+    return high_task_wakeup == pdTRUE;
 }
 
-static void _video_decode_display_task(void *arg)
+// ================ 任务逻辑 ================
+
+/**
+ * @brief 视频解码任务 (CPU1)
+ */
+static void _video_decode_task(void *arg)
 {
-    (void)arg;
     video_frame_info_t frame_info;
+    uint8_t idx = 0;
+
+    ESP_LOGI(TAG, "解码任务启动");
 
     while (1) {
-        uint8_t decode_idx = 0xFF;
-        portENTER_CRITICAL(&s_spinlock);
-        for (uint8_t i = 0; i < 2; i++) {
-            if (s_pingpong.buf[i].status == BUF_IDLE) {
-                s_pingpong.buf[i].status = BUF_DECODING;
-                decode_idx = i;
-                break;
-            }
-        }
-        portEXIT_CRITICAL(&s_spinlock);
+        uint16_t *decode_ptr = (uint16_t*)ppb_get_idle_block(s_ppb, &idx);
         
-        if (decode_idx == 0xFF) {
-            // 没有空闲的显示缓冲区
+        if (decode_ptr == NULL) {
+            s_frame_dropped++;
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
         
-        esp_err_t ret = video_decode_process(s_pingpong.buf[decode_idx].data, 240 * 240 * 2, &frame_info);
+        esp_err_t ret = video_decode_process(decode_ptr, 240 * 240 * 2, &frame_info);
         
-        if (ret != ESP_OK) {
-            if (ret != ESP_ERR_NOT_FOUND) {
-                ESP_LOGE(TAG, "视频解码失败");
-            }
-            portENTER_CRITICAL(&s_spinlock);
-            s_pingpong.buf[decode_idx].status = BUF_IDLE;
-            portEXIT_CRITICAL(&s_spinlock);
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
-
-        if (frame_info.width == 240 && frame_info.height == 240) {
-            // esp_new_jpeg 直接输出 RGB565_BE 格式，无需字节序转换
-            
-            // 标记为 READY
-            portENTER_CRITICAL(&s_spinlock);
-            s_pingpong.buf[decode_idx].status = BUF_READY;
-            portEXIT_CRITICAL(&s_spinlock);
-            
-            if (xSemaphoreGive(s_frame_ready_sem) != pdTRUE) {
-                ESP_LOGW(TAG, "显示任务繁忙，跳过此帧");
-                portENTER_CRITICAL(&s_spinlock);
-                s_pingpong.buf[decode_idx].status = BUF_IDLE;
-                portEXIT_CRITICAL(&s_spinlock);
-            }
+        if (ret == ESP_OK && frame_info.width == 240 && frame_info.height == 240) {
+            ppb_set_ready(s_ppb, idx);
+            s_frame_decoded++;
+            xSemaphoreGive(s_frame_ready_sem);
         } else {
-            ESP_LOGW(TAG, "视频尺寸不符合要求 (期望: 240x240, 实际: %dx%d)，不显示", frame_info.width, frame_info.height);
-            portENTER_CRITICAL(&s_spinlock);
-            s_pingpong.buf[decode_idx].status = BUF_IDLE;
-            portEXIT_CRITICAL(&s_spinlock);
+            if (ret != ESP_ERR_NOT_FOUND) {
+                ESP_LOGW(TAG, "解码失败: %d", ret);
+            }
+            ppb_release(s_ppb, idx, PPB_CONTEXT_TASK);
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
-
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
+/**
+ * @brief 显示驱动任务 (CPU0)
+ */
 static void _st7789_display_task(void *arg)
 {
-    (void)arg;
-
+    ESP_LOGI(TAG, "显示任务启动");
+    
     while (1) {
         xSemaphoreTake(s_frame_ready_sem, portMAX_DELAY);
         
-        uint8_t current_display_idx = 0xFF;
-        portENTER_CRITICAL(&s_spinlock);
-        for (uint8_t i = 0; i < 2; i++) {
-            if (s_pingpong.buf[i].status == BUF_READY) {
-                s_pingpong.buf[i].status = BUF_DISPLAYING;
-                current_display_idx = i;
-                break;
-            }
-        }
-        portEXIT_CRITICAL(&s_spinlock);
+        uint8_t ready_idx = 0;
+        uint16_t *ready_ptr = (uint16_t*)ppb_get_ready_block(s_ppb, &ready_idx);
         
-        if (current_display_idx != 0xFF) {
-            // 等待 DMA 空闲并设置新的显示索引
-            bool dma_ready = false;
-            while (!dma_ready) {
-                portENTER_CRITICAL(&s_spinlock);
-                dma_ready = (s_displaying_idx == 0xFF);
-                if (dma_ready) {
-                    s_displaying_idx = current_display_idx;
-                }
-                portEXIT_CRITICAL(&s_spinlock);
-                
-                if (!dma_ready) {
-                    vTaskDelay(pdMS_TO_TICKS(1));
-                }
-            }
-            st7789_lcd_draw_bitmap(0, 0, 240, 240, s_pingpong.buf[current_display_idx].data);
+        if (ready_ptr == NULL) {
+            continue;
         }
+        
+        xSemaphoreTake(s_dma_idle_sem, portMAX_DELAY);
+        
+        ppb_set_displaying(s_ppb, ready_idx);
+        s_current_dma_idx = ready_idx;
+        s_frame_displayed++;
+        
+        st7789_lcd_draw_bitmap(0, 0, 240, 240, ready_ptr);
+    }
+}
+
+/**
+ * @brief 统计信息打印任务
+ */
+static void _stats_task(void *arg)
+{
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        ESP_LOGI(TAG, "统计 - 解码:%lu 显示:%lu 丢帧:%lu", 
+                 s_frame_decoded, s_frame_displayed, s_frame_dropped);
     }
 }
 
 void demo_mqtt_video(void)
 {   
-    // 初始化 LED（红色：启动中）
     ws2812_led_init();
     ws2812_led_set_color(30, 0, 0);
-    ESP_LOGI(TAG, "LED: 红色（启动中）");
     
-    // 初始化 ST7789 LCD
-    ESP_LOGI(TAG, "初始化 ST7789 LCD...");
     ESP_ERROR_CHECK(st7789_lcd_init());
-    ESP_LOGI(TAG, "ST7789 LCD 初始化完成");
-    
-    // 分配 RGB565 双缓冲区
-    s_pingpong.buf[0].data = heap_caps_malloc(240 * 240 * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    s_pingpong.buf[1].data = heap_caps_malloc(240 * 240 * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    if (s_pingpong.buf[0].data == NULL || s_pingpong.buf[1].data == NULL) {
-        ESP_LOGE(TAG, "RGB565 缓冲区分配失败");
-        return;
-    }
-    s_pingpong.buf[0].status = BUF_IDLE;
-    s_pingpong.buf[1].status = BUF_IDLE;
-    ESP_LOGI(TAG, "RGB565 双缓冲区已分配 (每个 %u KB)", (240 * 240 * 2) / 1024);
-    
-    // 帧就绪信号量
-    s_frame_ready_sem = xSemaphoreCreateBinary();
-    if (s_frame_ready_sem == NULL) {
-        ESP_LOGE(TAG, "帧就绪信号量创建失败");
-        return;
-    }
-    
-    // DMA 传输完成回调
     ESP_ERROR_CHECK(st7789_lcd_register_trans_done_cb(_st7789_trans_done_cb, NULL));
     
-    // 初始化视频解码模块
+    s_ppb = ppb_create(240 * 240 * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (!s_ppb) {
+        ESP_LOGE(TAG, "Ping-Pong Buffer 创建失败");
+        return;
+    }
+    
+    s_frame_ready_sem = xSemaphoreCreateBinary();
+    s_dma_idle_sem = xSemaphoreCreateBinary();
+    if (!s_frame_ready_sem || !s_dma_idle_sem) {
+        ESP_LOGE(TAG, "信号量创建失败");
+        ppb_destroy(s_ppb);
+        return;
+    }
+    xSemaphoreGive(s_dma_idle_sem);
+    
     ESP_ERROR_CHECK(video_decode_init());
     
-    // 启动 WiFi
-    ESP_LOGI(TAG, "连接 WiFi...");
     ESP_ERROR_CHECK(wifi_start());
-    
-    // 等待 WiFi 连接
-    while (wifi_get_state() != WIFI_STATE_CONNECTED) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    
-    // WiFi 连接成功（黄色）
+    while (wifi_get_state() != WIFI_STATE_CONNECTED) vTaskDelay(pdMS_TO_TICKS(500));
     ws2812_led_set_color(30, 30, 0);
-    ESP_LOGI(TAG, "WiFi 已连接, LED: 黄色");
     
-    // 初始化 MQTT
-    ESP_LOGI(TAG, "初始化 MQTT...");
     ESP_ERROR_CHECK(mqtt_app_init());
     ESP_ERROR_CHECK(mqtt_app_register_data_handler(mqtt_app_video_handler));
-    
-    // 等待 MQTT 连接
-    while (!mqtt_app_is_connected()) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    
-    // MQTT 连接成功（绿色）
+    while (!mqtt_app_is_connected()) vTaskDelay(pdMS_TO_TICKS(500));
     ws2812_led_set_color(0, 30, 0);
-    ESP_LOGI(TAG, "MQTT 已连接, LED: 绿色");
     
-    // 创建视频解码任务（CPU1，优先级 5）
-    BaseType_t task_ret = xTaskCreatePinnedToCore(_video_decode_display_task, "video_decode", 8192, NULL, 5, NULL, 1);
-    if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "视频解码任务创建失败");
-        return;
-    }
-    ESP_LOGI(TAG, "视频解码任务已创建（CPU1）");
+    xTaskCreatePinnedToCore(_video_decode_task, "vid_dec", 8192, NULL, 7, NULL, 1);
+    xTaskCreatePinnedToCore(_st7789_display_task, "lcd_dis", 4096, NULL, 6, NULL, 0);
+    xTaskCreatePinnedToCore(_stats_task, "stats", 2048, NULL, 3, NULL, 0);
     
-    // 创建 ST7789 显示任务（CPU0，优先级 6）
-    task_ret = xTaskCreatePinnedToCore(_st7789_display_task, "st7789_display", 4096, NULL, 6, NULL, 0);
-    if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "ST7789 显示任务创建失败");
-        return;
-    }
-    ESP_LOGI(TAG, "ST7789 显示任务已创建（CPU0）");
-    
-    ESP_LOGI(TAG, "等待接收 JPEG 视频数据...");
+    ESP_LOGI(TAG, "视频流接收系统已就绪");
 }
 #endif

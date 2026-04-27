@@ -8,6 +8,7 @@ set(include_dirs
 
 set(requires
     esp_new_jpeg
+    ring_buf
 )
 
 idf_component_register(

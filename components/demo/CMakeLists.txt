@@ -19,6 +19,7 @@ set(requires
     AUDIO
     decode
     cJSON
+    pingpong_buf
 )
 
 idf_component_register(
