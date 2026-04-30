@@ -5,11 +5,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// UDP 数据接收回调函数类型
-// data: 接收到的数据
-// len: 数据长度
-// src_addr: 发送方 IP 地址字符串
-// src_port: 发送方端口
+/**
+ * @brief UDP 数据接收回调函数类型
+ * @param data 接收到的数据
+ * @param len 数据长度
+ * @param src_addr 发送方 IP 地址字符串
+ * @param src_port 发送方端口
+ */
 typedef void (*udp_recv_callback_t)(const uint8_t *data, size_t len, 
                                      const char *src_addr, uint16_t src_port);
 
@@ -39,7 +41,7 @@ esp_err_t udp_server_send(const char *dest_addr, uint16_t dest_port,
                           const uint8_t *data, size_t len);
 
 /**
- * @brief 广播 UDP 数据到局域网
+ * @brief 广播 UDP 数据到局域网（255.255.255.255）
  * @param port 目标端口
  * @param data 要发送的数据
  * @param len 数据长度

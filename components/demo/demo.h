@@ -11,7 +11,7 @@
 #define DEMO_UDP_VIDEO           6
 
 // 选择要运行的示例
-#define SELECTED_DEMO 5
+#define SELECTED_DEMO 6
 
 void demo_run(void);
 

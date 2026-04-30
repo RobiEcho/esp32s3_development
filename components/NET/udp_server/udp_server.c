@@ -18,7 +18,7 @@ static volatile bool s_running = false;
 
 static void udp_server_task(void *pvParameters)
 {
-    uint8_t *rx_buffer = heap_caps_malloc(UDP_RECV_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    uint8_t *rx_buffer = heap_caps_malloc(UDP_RECV_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!rx_buffer) {
         ESP_LOGE(TAG, "接收缓冲区分配失败");
         s_running = false;
@@ -32,8 +32,8 @@ static void udp_server_task(void *pvParameters)
     ESP_LOGI(TAG, "UDP 服务器任务已启动");
 
     while (s_running) {
-        int len = recvfrom(s_sock, rx_buffer, UDP_RECV_BUFFER_SIZE - 1, 0,
-                          (struct sockaddr *)&source_addr, &socklen);
+        // 接收 UDP 数据
+        int len = recvfrom(s_sock, rx_buffer, UDP_RECV_BUFFER_SIZE, 0, (struct sockaddr *)&source_addr, &socklen);
 
         if (len < 0) {
             // errno 11 (EAGAIN/EWOULDBLOCK) 是超时，继续循环
